@@ -1,0 +1,62 @@
+version: '3.7'
+services:
+  fdb-master:
+    hostname: fdb-master
+    image: 'fusiondb/fusiondb:latest'
+    ports:
+      - '8080:8080'
+      - '8306:8306'
+    volumes:
+      - ./etc:/opt/fusiondb-1.0.0/etc:ro
+    networks:
+      - fdb-network
+
+  mariadb:
+    hostname: mariadb
+    image: mariadb:latest
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: admin
+      MYSQL_DATABASE: metastore_db
+    networks:
+      - fdb-network
+
+  hive-metastore:
+    hostname: hive-metastore
+    image: 'fusiondb/hive-metastore:3.0.0'
+    ports:
+      - '9083:9083' # Metastore Thrift
+    volumes:
+      - ./conf/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+    environment:
+      METASTORE_DB_HOSTNAME: mariadb
+    depends_on:
+      - mariadb
+    networks:
+      - fdb-network
+
+  minio:
+    hostname: minio
+    image: 'minio/minio:latest'
+    container_name: minio
+    ports:
+      - '9000:9000'
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ACCESS_KEY: minio
+      MINIO_SECRET_KEY: minio123
+    command: server /data
+    networks:
+      - fdb-network
+
+volumes:
+  minio-data:
+    driver: local
+
+networks:
+  fdb-network:
+    driver: bridge
