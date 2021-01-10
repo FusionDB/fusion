@@ -175,6 +175,11 @@ public final class DiscoveryNodeManager
         for (InternalNode node : aliveNodes) {
             nodeStates.putIfAbsent(node.getNodeIdentifier(),
                     new RemoteNodeState(httpClient, uriBuilderFrom(node.getInternalUri()).appendPath("/v1/info/state").build()));
+            // TODO : update coordinator info to any worker node
+            if (getCoordinators().size() > 0) {
+                new HttpRemoteNodeAsyncCoordinator(httpClient, uriBuilderFrom(node.getInternalUri()).appendPath("/v1/info/coordinator").build(), getCoordinators())
+                        .asyncRefresh();
+            }
         }
 
         // Schedule refresh
