@@ -19,17 +19,17 @@ RUN \
     yum -y -q install less && \
     yum -q clean all && \
     rm -rf /var/cache/yum && \
-    groupadd trino --gid 1000 && \
-    useradd trino --uid 1000 --gid 1000 && \
-    mkdir -p /usr/lib/trino /data/trino && \
-    chown -R "trino:trino" /usr/lib/trino /data/trino
+    groupadd fusion --gid 1000 && \
+    useradd fusion --uid 1000 --gid 1000 && \
+    mkdir -p /usr/lib/fusion /data/fusion && \
+    chown -R "fusion:fusion" /usr/lib/fusion /data/fusion
 
-ARG TRINO_VERSION
-COPY trino-cli-${TRINO_VERSION}-executable.jar /usr/bin/trino
-COPY --chown=trino:trino trino-server-${TRINO_VERSION} /usr/lib/trino
-COPY --chown=trino:trino default/etc /etc/trino
+ARG FUSION_VERSION
+COPY fusion-cli-${FUSION_VERSION}-executable.jar /usr/bin/fusion
+COPY --chown=fusion:fusion fusion-server-${FUSION_VERSION} /usr/lib/fusion
+COPY --chown=fusion:fusion default/etc /etc/fusion
 
 EXPOSE 8080
-USER trino:trino
+USER fusion:fusion
 ENV LANG en_US.UTF-8
-CMD ["/usr/lib/trino/bin/run-trino"]
+CMD ["/usr/lib/fusion/bin/run-fusion"]
