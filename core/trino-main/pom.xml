@@ -454,6 +454,11 @@
             <artifactId>testcontainers</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>fusion-server</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

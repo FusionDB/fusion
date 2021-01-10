@@ -13,6 +13,8 @@
  */
 package io.trino.server;
 
+import cn.fusiondb.FusionDB;
+import cn.fusiondb.FusionModule;
 import com.google.common.base.Joiner;
 import com.google.common.base.StandardSystemProperty;
 import com.google.common.collect.ImmutableList;
@@ -101,7 +103,8 @@ public class Server
                 new EventListenerModule(),
                 new ServerMainModule(trinoVersion),
                 new GracefulShutdownModule(),
-                new WarningCollectorModule());
+                new WarningCollectorModule(),
+                new FusionModule());
 
         modules.addAll(getAdditionalModules());
 
@@ -132,6 +135,7 @@ public class Server
             injector.getInstance(Announcer.class).start();
 
             injector.getInstance(ServerInfoResource.class).startupComplete();
+            injector.getInstance(FusionDB.class).start();
 
             log.info("======== SERVER STARTED ========");
         }

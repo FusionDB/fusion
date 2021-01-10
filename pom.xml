@@ -28,8 +28,8 @@
     </licenses>
 
     <scm>
-        <connection>scm:git:git://github.com/trinodb/trino.git</connection>
-        <url>https://github.com/trinodb/trino</url>
+        <connection>scm:git:git://github.com/fusiondb/fusion.git</connection>
+        <url>https://github.com/fusiondb/fusion</url>
         <tag>HEAD</tag>
     </scm>
 
@@ -78,12 +78,14 @@
         <air.test.jvmsize>3g</air.test.jvmsize>
 
         <air.javadoc.lint>-missing</air.javadoc.lint>
+        <air.check.skip-all>true</air.check.skip-all>
     </properties>
 
     <modules>
         <module>client/trino-cli</module>
         <module>client/trino-client</module>
         <module>client/trino-jdbc</module>
+        <module>core/fusion-server</module>
         <module>core/trino-main</module>
         <module>core/trino-parser</module>
         <module>core/trino-server</module>
@@ -171,6 +173,12 @@
     <dependencyManagement>
         <dependencies>
             <!-- Trino -->
+            <dependency>
+                <groupId>io.trino</groupId>
+                <artifactId>fusion-server</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
             <dependency>
                 <groupId>io.trino</groupId>
                 <artifactId>trino-array</artifactId>
