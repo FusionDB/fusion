@@ -16,9 +16,9 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 mkdir ${DIR}/build
-cp ../../../core/trino-server/target/trino-server-*.tar.gz ${DIR}/build
+cp ../../../presto-server/target/presto-server-*.tar.gz ${DIR}/build
 export FUSIONDB_VERSION=1.0.0
-docker build --build-arg FUSIONDB_VERSION -t fusiondb/fusion .
-docker tag fusiondb/fusion fusiondb/fusion:${FUSIONDB_VERSION}
-docker image push fusiondb/fusion:${FUSIONDB_VERSION}
+docker build --build-arg FUSIONDB_VERSION -t fusiondb/fusiondb .
+docker tag fusiondb/fusiondb fusiondb/fusiondb:${FUSIONDB_VERSION}
+docker image push fusiondb/fusiondb:${FUSIONDB_VERSION}
 rm -rf ${DIR}/build
