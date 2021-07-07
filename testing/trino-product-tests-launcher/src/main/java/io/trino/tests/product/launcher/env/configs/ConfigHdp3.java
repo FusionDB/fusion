@@ -13,13 +13,10 @@
  */
 package io.trino.tests.product.launcher.env.configs;
 
-import com.google.common.collect.ImmutableList;
 import io.trino.tests.product.launcher.docker.DockerFiles;
 import io.trino.tests.product.launcher.env.Environment;
 
 import javax.inject.Inject;
-
-import java.util.List;
 
 import static io.trino.tests.product.launcher.env.EnvironmentContainers.PRESTO;
 import static java.util.Objects.requireNonNull;
@@ -37,14 +34,14 @@ public class ConfigHdp3
     }
 
     /**
-     * export HADOOP_BASE_IMAGE="prestodev/hdp3.1-hive"
+     * export HADOOP_BASE_IMAGE="ghcr.io/trinodb/testing/hdp3.1-hive"
      * export TEMPTO_ENVIRONMENT_CONFIG_FILE="/docker/presto-product-tests/conf/tempto/tempto-configuration-for-hive3.yaml"
      * export DISTRO_SKIP_GROUP=iceberg
      */
     @Override
     public String getHadoopBaseImage()
     {
-        return "prestodev/hdp3.1-hive";
+        return "ghcr.io/trinodb/testing/hdp3.1-hive";
     }
 
     @Override
@@ -59,12 +56,6 @@ public class ConfigHdp3
                         "/docker/presto-init.d/presto-init-hdp3.sh");
             }
         });
-    }
-
-    @Override
-    public List<String> getExcludedGroups()
-    {
-        return ImmutableList.of("iceberg");
     }
 
     @Override

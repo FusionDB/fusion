@@ -39,6 +39,7 @@ import io.trino.sql.tree.LongLiteral;
 import io.trino.sql.tree.Node;
 import io.trino.sql.tree.NotExpression;
 import io.trino.sql.tree.NullLiteral;
+import io.trino.sql.tree.QuantifiedComparisonExpression;
 import io.trino.sql.tree.Row;
 import io.trino.sql.tree.SearchedCaseExpression;
 import io.trino.sql.tree.SimpleCaseExpression;
@@ -289,6 +290,21 @@ public final class ExpressionVerifier
     }
 
     @Override
+    protected Boolean visitQuantifiedComparisonExpression(QuantifiedComparisonExpression actual, Node expectedExpression)
+    {
+        if (!(expectedExpression instanceof QuantifiedComparisonExpression)) {
+            return false;
+        }
+
+        QuantifiedComparisonExpression expected = (QuantifiedComparisonExpression) expectedExpression;
+
+        return actual.getQuantifier() == expected.getQuantifier() &&
+                actual.getOperator() == expected.getOperator() &&
+                process(actual.getValue(), expected.getValue()) &&
+                process(actual.getSubquery(), expected.getSubquery());
+    }
+
+    @Override
     protected Boolean visitInPredicate(InPredicate actual, Node expectedExpression)
     {
         if (!(expectedExpression instanceof InPredicate)) {
@@ -504,7 +520,7 @@ public final class ExpressionVerifier
                 extractFunctionName(actual.getName()).equals(extractFunctionName(expected.getName())) &&
                 process(actual.getArguments(), expected.getArguments()) &&
                 process(actual.getFilter(), expected.getFilter()) &&
-                process(actual.getWindow(), expected.getWindow());
+                process(actual.getWindow().map(Node.class::cast), expected.getWindow().map(Node.class::cast));
     }
 
     @Override

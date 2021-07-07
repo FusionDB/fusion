@@ -15,11 +15,18 @@ package io.trino.metadata;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
+import com.google.common.collect.Streams;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.slice.Slice;
 import io.trino.Session;
 import io.trino.client.NodeVersion;
@@ -69,18 +76,25 @@ import io.trino.spi.connector.ConnectorTableLayoutHandle;
 import io.trino.spi.connector.ConnectorTableLayoutResult;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableProperties;
+import io.trino.spi.connector.ConnectorTableSchema;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.ConnectorViewDefinition;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
+import io.trino.spi.connector.JoinApplicationResult;
+import io.trino.spi.connector.JoinCondition;
+import io.trino.spi.connector.JoinStatistics;
+import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.MaterializedViewFreshness;
 import io.trino.spi.connector.ProjectionApplicationResult;
+import io.trino.spi.connector.SampleApplicationResult;
 import io.trino.spi.connector.SampleType;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.SortItem;
 import io.trino.spi.connector.SystemTable;
+import io.trino.spi.connector.TableColumnsMetadata;
 import io.trino.spi.connector.TableScanRedirectApplicationResult;
 import io.trino.spi.connector.TopNApplicationResult;
 import io.trino.spi.expression.ConnectorExpression;
@@ -134,16 +148,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
+import static com.google.common.base.Verify.verifyNotNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.primitives.Primitives.wrap;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static io.airlift.concurrent.MoreFutures.toListenableFuture;
 import static io.trino.metadata.FunctionKind.AGGREGATE;
 import static io.trino.metadata.QualifiedObjectName.convertFromSchemaTableName;
+import static io.trino.metadata.RedirectionAwareTableHandle.noRedirection;
+import static io.trino.metadata.RedirectionAwareTableHandle.withRedirectionTo;
 import static io.trino.metadata.Signature.mangleOperatorName;
 import static io.trino.metadata.SignatureBinder.applyBoundVariables;
 import static io.trino.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_ERROR;
@@ -153,6 +173,7 @@ import static io.trino.spi.StandardErrorCode.INVALID_VIEW;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.SCHEMA_NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.SYNTAX_ERROR;
+import static io.trino.spi.StandardErrorCode.TABLE_REDIRECTION_ERROR;
 import static io.trino.spi.connector.ConnectorViewDefinition.ViewColumn;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.BOXED_NULLABLE;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.NEVER_NULL;
@@ -179,6 +200,9 @@ import static java.util.Objects.requireNonNull;
 public final class MetadataManager
         implements Metadata
 {
+    @VisibleForTesting
+    public static final int MAX_TABLE_REDIRECTIONS = 10;
+
     private final FunctionRegistry functions;
     private final TypeOperators typeOperators;
     private final FunctionResolver functionResolver;
@@ -186,6 +210,7 @@ public final class MetadataManager
     private final SessionPropertyManager sessionPropertyManager;
     private final SchemaPropertyManager schemaPropertyManager;
     private final TablePropertyManager tablePropertyManager;
+    private final MaterializedViewPropertyManager materializedViewPropertyManager;
     private final ColumnPropertyManager columnPropertyManager;
     private final AnalyzePropertyManager analyzePropertyManager;
     private final TransactionManager transactionManager;
@@ -196,12 +221,16 @@ public final class MetadataManager
 
     private final ResolvedFunctionDecoder functionDecoder;
 
+    private final LoadingCache<OperatorCacheKey, ResolvedFunction> operatorCache;
+    private final LoadingCache<CoercionCacheKey, ResolvedFunction> coercionCache;
+
     @Inject
     public MetadataManager(
             FeaturesConfig featuresConfig,
             SessionPropertyManager sessionPropertyManager,
             SchemaPropertyManager schemaPropertyManager,
             TablePropertyManager tablePropertyManager,
+            MaterializedViewPropertyManager materializedViewPropertyManager,
             ColumnPropertyManager columnPropertyManager,
             AnalyzePropertyManager analyzePropertyManager,
             TransactionManager transactionManager,
@@ -218,6 +247,7 @@ public final class MetadataManager
         this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
         this.schemaPropertyManager = requireNonNull(schemaPropertyManager, "schemaPropertyManager is null");
         this.tablePropertyManager = requireNonNull(tablePropertyManager, "tablePropertyManager is null");
+        this.materializedViewPropertyManager = requireNonNull(materializedViewPropertyManager, "materializedViewPropertyManager is null");
         this.columnPropertyManager = requireNonNull(columnPropertyManager, "columnPropertyManager is null");
         this.analyzePropertyManager = requireNonNull(analyzePropertyManager, "analyzePropertyManager is null");
         this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
@@ -243,6 +273,23 @@ public final class MetadataManager
         verifyTypes();
 
         functionDecoder = new ResolvedFunctionDecoder(this::getType);
+
+        operatorCache = CacheBuilder.newBuilder()
+                .maximumSize(1000)
+                .build(CacheLoader.from(key -> {
+                    String name = mangleOperatorName(key.getOperatorType());
+                    return resolveFunction(QualifiedName.of(name), fromTypes(key.getArgumentTypes()));
+                }));
+
+        coercionCache = CacheBuilder.newBuilder()
+                .maximumSize(1000)
+                .build(CacheLoader.from(key -> {
+                    String name = mangleOperatorName(key.getOperatorType());
+                    Type fromType = key.getFromType();
+                    Type toType = key.getToType();
+                    Signature signature = new Signature(name, toType.getTypeSignature(), ImmutableList.of(fromType.getTypeSignature()));
+                    return resolve(functionResolver.resolveCoercion(functions.get(QualifiedName.of(name)), signature));
+                }));
     }
 
     public static MetadataManager createTestMetadataManager()
@@ -273,6 +320,7 @@ public final class MetadataManager
                 new SessionPropertyManager(),
                 new SchemaPropertyManager(),
                 new TablePropertyManager(),
+                new MaterializedViewPropertyManager(),
                 new ColumnPropertyManager(),
                 new AnalyzePropertyManager(),
                 transactionManager,
@@ -378,7 +426,7 @@ public final class MetadataManager
     public Optional<SystemTable> getSystemTable(Session session, QualifiedObjectName tableName)
     {
         requireNonNull(session, "session is null");
-        requireNonNull(tableName, "table is null");
+        requireNonNull(tableName, "tableName is null");
 
         Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, tableName.getCatalogName());
         if (catalog.isPresent()) {
@@ -505,6 +553,16 @@ public final class MetadataManager
     }
 
     @Override
+    public TableSchema getTableSchema(Session session, TableHandle tableHandle)
+    {
+        CatalogName catalogName = tableHandle.getCatalogName();
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        ConnectorTableSchema tableSchema = metadata.getTableSchema(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle());
+
+        return new TableSchema(catalogName, tableSchema);
+    }
+
+    @Override
     public TableMetadata getTableMetadata(Session session, TableHandle tableHandle)
     {
         CatalogName catalogName = tableHandle.getCatalogName();
@@ -519,7 +577,9 @@ public final class MetadataManager
     {
         CatalogName catalogName = tableHandle.getCatalogName();
         ConnectorMetadata metadata = getMetadata(session, catalogName);
-        return metadata.getTableStatistics(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), constraint);
+        TableStatistics tableStatistics = metadata.getTableStatistics(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), constraint);
+        verifyNotNull(tableStatistics, "%s returned null tableStatistics for %s", metadata, tableHandle);
+        return tableStatistics;
     }
 
     @Override
@@ -579,20 +639,25 @@ public final class MetadataManager
 
     private boolean isExistingRelation(Session session, QualifiedObjectName name)
     {
-        if (getTableHandle(session, name).isPresent()) {
+        if (getMaterializedView(session, name).isPresent()) {
+            return true;
+        }
+        if (getView(session, name).isPresent()) {
             return true;
         }
 
-        return getView(session, name).isPresent();
+        return getTableHandle(session, name).isPresent();
     }
 
     @Override
-    public Map<QualifiedObjectName, List<ColumnMetadata>> listTableColumns(Session session, QualifiedTablePrefix prefix)
+    public Map<CatalogName, List<TableColumnsMetadata>> listTableColumns(Session session, QualifiedTablePrefix prefix)
     {
         requireNonNull(prefix, "prefix is null");
 
         Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, prefix.getCatalogName());
-        Map<QualifiedObjectName, List<ColumnMetadata>> tableColumns = new HashMap<>();
+
+        // Track column metadata for every object name to resolve ties between table and view
+        Map<SchemaTableName, Optional<List<ColumnMetadata>>> tableColumns = new HashMap<>();
         if (catalog.isPresent()) {
             CatalogMetadata catalogMetadata = catalog.get();
 
@@ -601,15 +666,12 @@ public final class MetadataManager
                 ConnectorMetadata metadata = catalogMetadata.getMetadataFor(catalogName);
 
                 ConnectorSession connectorSession = session.toConnectorSession(catalogName);
-                for (Entry<SchemaTableName, List<ColumnMetadata>> entry : metadata.listTableColumns(connectorSession, tablePrefix).entrySet()) {
-                    QualifiedObjectName tableName = new QualifiedObjectName(
-                            prefix.getCatalogName(),
-                            entry.getKey().getSchemaName(),
-                            entry.getKey().getTableName());
-                    tableColumns.put(tableName, entry.getValue());
-                }
 
-                // if table and view names overlap, the view wins
+                // Collect column metadata from tables
+                metadata.streamTableColumns(connectorSession, tablePrefix)
+                        .forEach(columnsMetadata -> tableColumns.put(columnsMetadata.getTable(), columnsMetadata.getColumns()));
+
+                // Collect column metadata from views. if table and view names overlap, the view wins
                 for (Entry<QualifiedObjectName, ConnectorViewDefinition> entry : getViews(session, prefix).entrySet()) {
                     ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
                     for (ViewColumn column : entry.getValue().getColumns()) {
@@ -620,11 +682,29 @@ public final class MetadataManager
                             throw new TrinoException(INVALID_VIEW, format("Unknown type '%s' for column '%s' in view: %s", column.getType(), column.getName(), entry.getKey()));
                         }
                     }
-                    tableColumns.put(entry.getKey(), columns.build());
+                    tableColumns.put(entry.getKey().asSchemaTableName(), Optional.of(columns.build()));
+                }
+
+                // if view and materialized view names overlap, the materialized view wins
+                for (Entry<QualifiedObjectName, ConnectorMaterializedViewDefinition> entry : getMaterializedViews(session, prefix).entrySet()) {
+                    ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
+                    for (ConnectorMaterializedViewDefinition.Column column : entry.getValue().getColumns()) {
+                        try {
+                            columns.add(new ColumnMetadata(column.getName(), getType(column.getType())));
+                        }
+                        catch (TypeNotFoundException e) {
+                            throw new TrinoException(INVALID_VIEW, format("Unknown type '%s' for column '%s' in materialized view: %s", column.getType(), column.getName(), entry.getKey()));
+                        }
+                    }
+                    tableColumns.put(entry.getKey().asSchemaTableName(), Optional.of(columns.build()));
                 }
             }
         }
-        return ImmutableMap.copyOf(tableColumns);
+        return ImmutableMap.of(
+                new CatalogName(prefix.getCatalogName()),
+                tableColumns.entrySet().stream()
+                        .map(entry -> new TableColumnsMetadata(entry.getKey(), entry.getValue()))
+                        .collect(toImmutableList()));
     }
 
     @Override
@@ -862,6 +942,27 @@ public final class MetadataManager
     }
 
     @Override
+    public boolean delegateMaterializedViewRefreshToConnector(Session session, QualifiedObjectName viewName)
+    {
+        CatalogName catalogName = new CatalogName(viewName.getCatalogName());
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        return metadata.delegateMaterializedViewRefreshToConnector(session.toConnectorSession(catalogName), viewName.asSchemaTableName());
+    }
+
+    @Override
+    public ListenableFuture<Void> refreshMaterializedView(Session session, QualifiedObjectName viewName)
+    {
+        CatalogName catalogName = new CatalogName(viewName.getCatalogName());
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        return asVoid(toListenableFuture(metadata.refreshMaterializedView(session.toConnectorSession(catalogName), viewName.asSchemaTableName())));
+    }
+
+    private static <T> ListenableFuture<Void> asVoid(ListenableFuture<T> future)
+    {
+        return Futures.transform(future, v -> null, directExecutor());
+    }
+
+    @Override
     public InsertTableHandle beginRefreshMaterializedView(Session session, TableHandle tableHandle, List<TableHandle> sourceTableHandles)
     {
         CatalogName catalogName = tableHandle.getCatalogName();
@@ -902,15 +1003,23 @@ public final class MetadataManager
                 .map(TableHandle::getConnectorHandle)
                 .collect(toImmutableList());
         return metadata.finishRefreshMaterializedView(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), insertHandle.getConnectorHandle(),
-            fragments, computedStatistics, sourceConnectorHandles);
+                fragments, computedStatistics, sourceConnectorHandles);
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
     {
         CatalogName catalogName = tableHandle.getCatalogName();
         ConnectorMetadata metadata = getMetadata(session, catalogName);
-        return metadata.getUpdateRowIdColumnHandle(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle());
+        return metadata.getDeleteRowIdColumnHandle(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle());
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        CatalogName catalogName = tableHandle.getCatalogName();
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        return metadata.getUpdateRowIdColumnHandle(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), updatedColumns);
     }
 
     @Override
@@ -975,6 +1084,23 @@ public final class MetadataManager
         CatalogName catalogName = tableHandle.getCatalogName();
         ConnectorMetadata metadata = getMetadata(session, catalogName);
         metadata.finishDelete(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), fragments);
+    }
+
+    @Override
+    public TableHandle beginUpdate(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        CatalogName catalogName = tableHandle.getCatalogName();
+        ConnectorMetadata metadata = getMetadataForWrite(session, catalogName);
+        ConnectorTableHandle newHandle = metadata.beginUpdate(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), updatedColumns);
+        return new TableHandle(tableHandle.getCatalogName(), newHandle, tableHandle.getTransaction(), tableHandle.getLayout());
+    }
+
+    @Override
+    public void finishUpdate(Session session, TableHandle tableHandle, Collection<Slice> fragments)
+    {
+        CatalogName catalogName = tableHandle.getCatalogName();
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        metadata.finishUpdate(session.toConnectorSession(catalogName), tableHandle.getConnectorHandle(), fragments);
     }
 
     @Override
@@ -1169,6 +1295,74 @@ public final class MetadataManager
     }
 
     @Override
+    public List<QualifiedObjectName> listMaterializedViews(Session session, QualifiedTablePrefix prefix)
+    {
+        requireNonNull(prefix, "prefix is null");
+
+        Optional<QualifiedObjectName> objectName = prefix.asQualifiedObjectName();
+        if (objectName.isPresent()) {
+            return getMaterializedView(session, objectName.get())
+                    .map(handle -> ImmutableList.of(objectName.get()))
+                    .orElseGet(ImmutableList::of);
+        }
+
+        Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, prefix.getCatalogName());
+
+        Set<QualifiedObjectName> materializedViews = new LinkedHashSet<>();
+        if (catalog.isPresent()) {
+            CatalogMetadata catalogMetadata = catalog.get();
+
+            for (CatalogName catalogName : catalogMetadata.listConnectorIds()) {
+                ConnectorMetadata metadata = catalogMetadata.getMetadataFor(catalogName);
+                ConnectorSession connectorSession = session.toConnectorSession(catalogName);
+                metadata.listMaterializedViews(connectorSession, prefix.getSchemaName()).stream()
+                        .map(convertFromSchemaTableName(prefix.getCatalogName()))
+                        .filter(prefix::matches)
+                        .forEach(materializedViews::add);
+            }
+        }
+        return ImmutableList.copyOf(materializedViews);
+    }
+
+    @Override
+    public Map<QualifiedObjectName, ConnectorMaterializedViewDefinition> getMaterializedViews(Session session, QualifiedTablePrefix prefix)
+    {
+        requireNonNull(prefix, "prefix is null");
+
+        Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, prefix.getCatalogName());
+
+        Map<QualifiedObjectName, ConnectorMaterializedViewDefinition> views = new LinkedHashMap<>();
+        if (catalog.isPresent()) {
+            CatalogMetadata catalogMetadata = catalog.get();
+
+            SchemaTablePrefix tablePrefix = prefix.asSchemaTablePrefix();
+            for (CatalogName catalogName : catalogMetadata.listConnectorIds()) {
+                ConnectorMetadata metadata = catalogMetadata.getMetadataFor(catalogName);
+                ConnectorSession connectorSession = session.toConnectorSession(catalogName);
+
+                Map<SchemaTableName, ConnectorMaterializedViewDefinition> materializedViewMap;
+                if (tablePrefix.getTable().isPresent()) {
+                    materializedViewMap = metadata.getMaterializedView(connectorSession, tablePrefix.toSchemaTableName())
+                            .map(view -> ImmutableMap.of(tablePrefix.toSchemaTableName(), view))
+                            .orElse(ImmutableMap.of());
+                }
+                else {
+                    materializedViewMap = metadata.getMaterializedViews(connectorSession, tablePrefix.getSchema());
+                }
+
+                for (Entry<SchemaTableName, ConnectorMaterializedViewDefinition> entry : materializedViewMap.entrySet()) {
+                    QualifiedObjectName viewName = new QualifiedObjectName(
+                            prefix.getCatalogName(),
+                            entry.getKey().getSchemaName(),
+                            entry.getKey().getTableName());
+                    views.put(viewName, entry.getValue());
+                }
+            }
+        }
+        return ImmutableMap.copyOf(views);
+    }
+
+    @Override
     public Optional<ConnectorMaterializedViewDefinition> getMaterializedView(Session session, QualifiedObjectName viewName)
     {
         if (viewName.getCatalogName().isEmpty() || viewName.getSchemaName().isEmpty() || viewName.getObjectName().isEmpty()) {
@@ -1213,6 +1407,71 @@ public final class MetadataManager
         return metadata.applyTableScanRedirect(connectorSession, tableHandle.getConnectorHandle());
     }
 
+    private QualifiedObjectName getRedirectedTableName(Session session, QualifiedObjectName originalTableName)
+    {
+        requireNonNull(session, "session is null");
+        requireNonNull(originalTableName, "originalTableName is null");
+
+        QualifiedObjectName tableName = originalTableName;
+        Set<QualifiedObjectName> visitedTableNames = new LinkedHashSet<>();
+        visitedTableNames.add(tableName);
+
+        for (int count = 0; count < MAX_TABLE_REDIRECTIONS; count++) {
+            Optional<CatalogMetadata> catalog = getOptionalCatalogMetadata(session, tableName.getCatalogName());
+
+            if (catalog.isEmpty()) {
+                // Stop redirection
+                return tableName;
+            }
+
+            CatalogMetadata catalogMetadata = catalog.get();
+            CatalogName catalogName = catalogMetadata.getConnectorId(session, tableName);
+            ConnectorMetadata metadata = catalogMetadata.getMetadataFor(catalogName);
+
+            Optional<QualifiedObjectName> redirectedTableName = metadata.redirectTable(session.toConnectorSession(catalogName), tableName.asSchemaTableName())
+                    .map(name -> convertFromSchemaTableName(name.getCatalogName()).apply(name.getSchemaTableName()));
+
+            if (redirectedTableName.isEmpty()) {
+                return tableName;
+            }
+
+            tableName = redirectedTableName.get();
+
+            // Check for loop in redirection
+            if (!visitedTableNames.add(tableName)) {
+                throw new TrinoException(TABLE_REDIRECTION_ERROR,
+                        format("Table redirections form a loop: %s",
+                                Streams.concat(visitedTableNames.stream(), Stream.of(tableName))
+                                        .map(QualifiedObjectName::toString)
+                                        .collect(Collectors.joining(" -> "))));
+            }
+        }
+        throw new TrinoException(TABLE_REDIRECTION_ERROR, format("Table redirected too many times (%d): %s", MAX_TABLE_REDIRECTIONS, visitedTableNames));
+    }
+
+    @Override
+    public RedirectionAwareTableHandle getRedirectionAwareTableHandle(Session session, QualifiedObjectName tableName)
+    {
+        QualifiedObjectName targetTableName = getRedirectedTableName(session, tableName);
+        if (targetTableName.equals(tableName)) {
+            return noRedirection(getTableHandle(session, tableName));
+        }
+
+        Optional<TableHandle> tableHandle = getTableHandle(session, targetTableName);
+        if (tableHandle.isPresent()) {
+            return withRedirectionTo(targetTableName, tableHandle.get());
+        }
+
+        // Redirected table must exist
+        if (getCatalogHandle(session, targetTableName.getCatalogName()).isEmpty()) {
+            throw new TrinoException(TABLE_REDIRECTION_ERROR, format("Table '%s' redirected to '%s', but the target catalog '%s' does not exist", tableName, targetTableName, targetTableName.getCatalogName()));
+        }
+        if (!schemaExists(session, new CatalogSchemaName(targetTableName.getCatalogName(), targetTableName.getSchemaName()))) {
+            throw new TrinoException(TABLE_REDIRECTION_ERROR, format("Table '%s' redirected to '%s', but the target schema '%s' does not exist", tableName, targetTableName, targetTableName.getSchemaName()));
+        }
+        throw new TrinoException(TABLE_REDIRECTION_ERROR, format("Table '%s' redirected to '%s', but the target table '%s' does not exist", tableName, targetTableName, targetTableName));
+    }
+
     @Override
     public Optional<ResolvedIndex> resolveIndex(Session session, TableHandle tableHandle, Set<ColumnHandle> indexableColumns, Set<ColumnHandle> outputColumns, TupleDomain<ColumnHandle> tupleDomain)
     {
@@ -1245,11 +1504,12 @@ public final class MetadataManager
         return metadata.applyLimit(connectorSession, table.getConnectorHandle(), limit)
                 .map(result -> new LimitApplicationResult<>(
                         new TableHandle(catalogName, result.getHandle(), table.getTransaction(), Optional.empty()),
-                        result.isLimitGuaranteed()));
+                        result.isLimitGuaranteed(),
+                        result.isPrecalculateStatistics()));
     }
 
     @Override
-    public Optional<TableHandle> applySample(Session session, TableHandle table, SampleType sampleType, double sampleRatio)
+    public Optional<SampleApplicationResult<TableHandle>> applySample(Session session, TableHandle table, SampleType sampleType, double sampleRatio)
     {
         CatalogName catalogName = table.getCatalogName();
         ConnectorMetadata metadata = getMetadata(session, catalogName);
@@ -1260,11 +1520,12 @@ public final class MetadataManager
 
         ConnectorSession connectorSession = session.toConnectorSession(catalogName);
         return metadata.applySample(connectorSession, table.getConnectorHandle(), sampleType, sampleRatio)
-                .map(result -> new TableHandle(
+                .map(result -> new SampleApplicationResult<>(new TableHandle(
                         catalogName,
-                        result,
+                        result.getHandle(),
                         table.getTransaction(),
-                        Optional.empty()));
+                        Optional.empty()),
+                        result.isPrecalculateStatistics()));
     }
 
     @Override
@@ -1294,8 +1555,71 @@ public final class MetadataManager
                             new TableHandle(catalogName, result.getHandle(), table.getTransaction(), Optional.empty()),
                             result.getProjections(),
                             result.getAssignments(),
-                            result.getGroupingColumnMapping());
+                            result.getGroupingColumnMapping(),
+                            result.isPrecalculateStatistics());
                 });
+    }
+
+    @Override
+    public Optional<JoinApplicationResult<TableHandle>> applyJoin(
+            Session session,
+            JoinType joinType,
+            TableHandle left,
+            TableHandle right,
+            List<JoinCondition> joinConditions,
+            Map<String, ColumnHandle> leftAssignments,
+            Map<String, ColumnHandle> rightAssignments,
+            JoinStatistics statistics)
+    {
+        if (!right.getCatalogName().equals(left.getCatalogName())) {
+            // Exact comparison is fine as catalog name here is passed from CatalogMetadata and is normalized to lowercase
+            return Optional.empty();
+        }
+        CatalogName catalogName = left.getCatalogName();
+
+        ConnectorTransactionHandle transaction = left.getTransaction();
+        ConnectorMetadata metadata = getMetadata(session, catalogName);
+        ConnectorSession connectorSession = session.toConnectorSession(catalogName);
+
+        Optional<JoinApplicationResult<ConnectorTableHandle>> connectorResult =
+                metadata.applyJoin(
+                        connectorSession,
+                        joinType,
+                        left.getConnectorHandle(),
+                        right.getConnectorHandle(),
+                        joinConditions,
+                        leftAssignments,
+                        rightAssignments,
+                        statistics);
+
+        return connectorResult.map(result -> {
+            Set<ColumnHandle> leftColumnHandles = ImmutableSet.copyOf(getColumnHandles(session, left).values());
+            Set<ColumnHandle> rightColumnHandles = ImmutableSet.copyOf(getColumnHandles(session, right).values());
+            Set<ColumnHandle> leftColumnHandlesMappingKeys = result.getLeftColumnHandles().keySet();
+            Set<ColumnHandle> rightColumnHandlesMappingKeys = result.getRightColumnHandles().keySet();
+
+            if (leftColumnHandlesMappingKeys.size() != leftColumnHandles.size()
+                    || rightColumnHandlesMappingKeys.size() != rightColumnHandles.size()
+                    || !leftColumnHandlesMappingKeys.containsAll(leftColumnHandles)
+                    || !rightColumnHandlesMappingKeys.containsAll(rightColumnHandles)) {
+                throw new IllegalStateException(format(
+                        "Column handle mappings do not match old column handles: left=%s; right=%s; newLeft=%s, newRight=%s",
+                        leftColumnHandles,
+                        rightColumnHandles,
+                        leftColumnHandlesMappingKeys,
+                        rightColumnHandlesMappingKeys));
+            }
+
+            return new JoinApplicationResult<>(
+                    new TableHandle(
+                            catalogName,
+                            result.getTableHandle(),
+                            transaction,
+                            Optional.empty()),
+                    result.getLeftColumnHandles(),
+                    result.getRightColumnHandles(),
+                    result.isPrecalculateStatistics());
+        });
     }
 
     @Override
@@ -1317,7 +1641,8 @@ public final class MetadataManager
         return metadata.applyTopN(connectorSession, table.getConnectorHandle(), topNCount, sortItems, assignments)
                 .map(result -> new TopNApplicationResult<>(
                         new TableHandle(catalogName, result.getHandle(), table.getTransaction(), Optional.empty()),
-                        result.isTopNGuaranteed()));
+                        result.isTopNGuaranteed(),
+                        result.isPrecalculateStatistics()));
     }
 
     private void verifyProjection(TableHandle table, List<ConnectorExpression> projections, List<Assignment> assignments, int expectedProjectionSize)
@@ -1365,7 +1690,8 @@ public final class MetadataManager
         return metadata.applyFilter(connectorSession, table.getConnectorHandle(), constraint)
                 .map(result -> new ConstraintApplicationResult<>(
                         new TableHandle(catalogName, result.getHandle(), table.getTransaction(), Optional.empty()),
-                        result.getRemainingFilter()));
+                        result.getRemainingFilter(),
+                        result.isPrecalculateStatistics()));
     }
 
     @Override
@@ -1386,7 +1712,8 @@ public final class MetadataManager
                     return new ProjectionApplicationResult<>(
                             new TableHandle(catalogName, result.getHandle(), table.getTransaction(), Optional.empty()),
                             result.getProjections(),
-                            result.getAssignments());
+                            result.getAssignments(),
+                            result.isPrecalculateStatistics());
                 });
     }
 
@@ -1541,6 +1868,7 @@ public final class MetadataManager
         metadata.revokeSchemaPrivileges(session.toConnectorSession(catalogName), schemaName.getSchemaName(), privileges, grantee, grantOption);
     }
 
+    // TODO support table redirection
     @Override
     public List<GrantInfo> listTablePrivileges(Session session, QualifiedTablePrefix prefix)
     {
@@ -1783,11 +2111,15 @@ public final class MetadataManager
             throws OperatorNotFoundException
     {
         try {
-            return resolveFunction(QualifiedName.of(mangleOperatorName(operatorType)), fromTypes(argumentTypes));
+            return operatorCache.getUnchecked(new OperatorCacheKey(operatorType, argumentTypes));
         }
-        catch (TrinoException e) {
-            if (e.getErrorCode().getCode() == FUNCTION_NOT_FOUND.toErrorCode().getCode()) {
-                throw new OperatorNotFoundException(operatorType, argumentTypes, e);
+        catch (UncheckedExecutionException e) {
+            if (e.getCause() instanceof TrinoException) {
+                TrinoException cause = (TrinoException) e.getCause();
+                if (cause.getErrorCode().getCode() == FUNCTION_NOT_FOUND.toErrorCode().getCode()) {
+                    throw new OperatorNotFoundException(operatorType, argumentTypes, cause);
+                }
+                throw cause;
             }
             throw e;
         }
@@ -1798,12 +2130,15 @@ public final class MetadataManager
     {
         checkArgument(operatorType == OperatorType.CAST || operatorType == OperatorType.SATURATED_FLOOR_CAST);
         try {
-            String name = mangleOperatorName(operatorType);
-            return resolve(functionResolver.resolveCoercion(functions.get(QualifiedName.of(name)), new Signature(name, toType.getTypeSignature(), ImmutableList.of(fromType.getTypeSignature()))));
+            return coercionCache.getUnchecked(new CoercionCacheKey(operatorType, fromType, toType));
         }
-        catch (TrinoException e) {
-            if (e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
-                throw new OperatorNotFoundException(operatorType, ImmutableList.of(fromType), toType.getTypeSignature(), e);
+        catch (UncheckedExecutionException e) {
+            if (e.getCause() instanceof TrinoException) {
+                TrinoException cause = (TrinoException) e.getCause();
+                if (cause.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
+                    throw new OperatorNotFoundException(operatorType, ImmutableList.of(fromType), toType.getTypeSignature(), cause);
+                }
+                throw cause;
             }
             throw e;
         }
@@ -1914,6 +2249,7 @@ public final class MetadataManager
         return new FunctionMetadata(
                 functionMetadata.getFunctionId(),
                 resolvedFunction.getSignature().toSignature(),
+                functionMetadata.getActualName(),
                 functionMetadata.isNullable(),
                 argumentDefinitions,
                 functionMetadata.isHidden(),
@@ -2110,6 +2446,12 @@ public final class MetadataManager
     }
 
     @Override
+    public MaterializedViewPropertyManager getMaterializedViewPropertyManager()
+    {
+        return materializedViewPropertyManager;
+    }
+
+    @Override
     public ColumnPropertyManager getColumnPropertyManager()
     {
         return columnPropertyManager;
@@ -2210,6 +2552,98 @@ public final class MetadataManager
                 ConnectorSession connectorSession = session.toConnectorSession(catalogMetadata.getCatalogName());
                 catalogMetadata.getMetadata().cleanupQuery(connectorSession);
             }
+        }
+    }
+
+    private static class OperatorCacheKey
+    {
+        private final OperatorType operatorType;
+        private final List<? extends Type> argumentTypes;
+
+        private OperatorCacheKey(OperatorType operatorType, List<? extends Type> argumentTypes)
+        {
+            this.operatorType = requireNonNull(operatorType, "operatorType is null");
+            this.argumentTypes = ImmutableList.copyOf(requireNonNull(argumentTypes, "argumentTypes is null"));
+        }
+
+        public OperatorType getOperatorType()
+        {
+            return operatorType;
+        }
+
+        public List<? extends Type> getArgumentTypes()
+        {
+            return argumentTypes;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(operatorType, argumentTypes);
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof OperatorCacheKey)) {
+                return false;
+            }
+            OperatorCacheKey other = (OperatorCacheKey) obj;
+            return Objects.equals(this.operatorType, other.operatorType) &&
+                    Objects.equals(this.argumentTypes, other.argumentTypes);
+        }
+    }
+
+    private static class CoercionCacheKey
+    {
+        private final OperatorType operatorType;
+        private final Type fromType;
+        private final Type toType;
+
+        private CoercionCacheKey(OperatorType operatorType, Type fromType, Type toType)
+        {
+            this.operatorType = requireNonNull(operatorType, "operatorType is null");
+            this.fromType = requireNonNull(fromType, "fromType is null");
+            this.toType = requireNonNull(toType, "toType is null");
+        }
+
+        public OperatorType getOperatorType()
+        {
+            return operatorType;
+        }
+
+        public Type getFromType()
+        {
+            return fromType;
+        }
+
+        public Type getToType()
+        {
+            return toType;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(operatorType, fromType, toType);
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof CoercionCacheKey)) {
+                return false;
+            }
+            CoercionCacheKey other = (CoercionCacheKey) obj;
+            return Objects.equals(this.operatorType, other.operatorType) &&
+                    Objects.equals(this.fromType, other.fromType) &&
+                    Objects.equals(this.toType, other.toType);
         }
     }
 }

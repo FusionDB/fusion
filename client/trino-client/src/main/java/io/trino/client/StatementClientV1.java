@@ -18,7 +18,6 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
-import io.airlift.json.JsonCodec;
 import io.airlift.units.Duration;
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
@@ -49,7 +48,7 @@ import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.net.HttpHeaders.ACCEPT_ENCODING;
 import static com.google.common.net.HttpHeaders.USER_AGENT;
-import static io.airlift.json.JsonCodec.jsonCodec;
+import static io.trino.client.JsonCodec.jsonCodec;
 import static io.trino.client.ProtocolHeaders.TRINO_HEADERS;
 import static java.lang.String.format;
 import static java.net.HttpURLConnection.HTTP_OK;
@@ -101,7 +100,7 @@ class StatementClientV1
         this.timeZone = session.getTimeZone();
         this.query = query;
         this.requestTimeoutNanos = session.getClientRequestTimeout();
-        this.user = session.getUser();
+        this.user = session.getUser().orElse(session.getPrincipal());
         this.clientCapabilities = Joiner.on(",").join(ClientCapabilities.values());
         this.compressionDisabled = session.isCompressionDisabled();
 
@@ -517,7 +516,7 @@ class StatementClientV1
         CLIENT_ERROR,
         CLIENT_ABORTED,
         /**
-         * finished on remote Presto server (including failed and successfully completed)
+         * finished on remote Trino server (including failed and successfully completed)
          */
         FINISHED,
     }

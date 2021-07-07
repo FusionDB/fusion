@@ -21,7 +21,6 @@ import io.trino.metadata.AllNodes;
 import io.trino.metadata.InternalNode;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
-import io.trino.metadata.SessionPropertyManager;
 import io.trino.metadata.SqlFunction;
 import io.trino.server.testing.TestingTrinoServer;
 import io.trino.spi.Plugin;
@@ -40,8 +39,6 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static io.airlift.testing.Closeables.closeAll;
-import static io.trino.testing.AbstractTestQueries.TEST_CATALOG_PROPERTIES;
-import static io.trino.testing.AbstractTestQueries.TEST_SYSTEM_PROPERTIES;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -50,7 +47,7 @@ public final class StandaloneQueryRunner
 {
     private final TestingTrinoServer server;
 
-    private final TestingTrinoClient prestoClient;
+    private final TestingTrinoClient trinoClient;
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -59,15 +56,11 @@ public final class StandaloneQueryRunner
         requireNonNull(defaultSession, "defaultSession is null");
 
         this.server = createTestingTrinoServer();
-        this.prestoClient = new TestingTrinoClient(server, defaultSession);
+        this.trinoClient = new TestingTrinoClient(server, defaultSession);
 
         refreshNodes();
 
         server.getMetadata().addFunctions(AbstractTestQueries.CUSTOM_FUNCTIONS);
-
-        SessionPropertyManager sessionPropertyManager = server.getMetadata().getSessionPropertyManager();
-        sessionPropertyManager.addSystemSessionProperties(TEST_SYSTEM_PROPERTIES);
-        sessionPropertyManager.addConnectorSessionProperties(new CatalogName("catalog"), TEST_CATALOG_PROPERTIES);
     }
 
     @Override
@@ -75,7 +68,7 @@ public final class StandaloneQueryRunner
     {
         lock.readLock().lock();
         try {
-            return prestoClient.execute(sql).getResult();
+            return trinoClient.execute(sql).getResult();
         }
         finally {
             lock.readLock().unlock();
@@ -87,7 +80,7 @@ public final class StandaloneQueryRunner
     {
         lock.readLock().lock();
         try {
-            return prestoClient.execute(session, sql).getResult();
+            return trinoClient.execute(session, sql).getResult();
         }
         finally {
             lock.readLock().unlock();
@@ -98,7 +91,7 @@ public final class StandaloneQueryRunner
     public void close()
     {
         try {
-            closeAll(prestoClient, server);
+            closeAll(trinoClient, server);
         }
         catch (IOException e) {
             throw new RuntimeException(e);
@@ -114,7 +107,7 @@ public final class StandaloneQueryRunner
     @Override
     public Session getDefaultSession()
     {
-        return prestoClient.getDefaultSession();
+        return trinoClient.getDefaultSession();
     }
 
     @Override
@@ -234,7 +227,7 @@ public final class StandaloneQueryRunner
     {
         lock.readLock().lock();
         try {
-            return prestoClient.listTables(session, catalog, schema);
+            return trinoClient.listTables(session, catalog, schema);
         }
         finally {
             lock.readLock().unlock();
@@ -246,7 +239,7 @@ public final class StandaloneQueryRunner
     {
         lock.readLock().lock();
         try {
-            return prestoClient.tableExists(session, table);
+            return trinoClient.tableExists(session, table);
         }
         finally {
             lock.readLock().unlock();

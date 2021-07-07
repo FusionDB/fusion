@@ -22,13 +22,10 @@ import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
-import org.openjdk.jmh.runner.Runner;
-import org.openjdk.jmh.runner.options.Options;
-import org.openjdk.jmh.runner.options.OptionsBuilder;
-import org.openjdk.jmh.runner.options.VerboseMode;
 
 import java.util.concurrent.ThreadLocalRandom;
 
+import static io.trino.jmh.Benchmarks.benchmark;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -78,17 +75,12 @@ public class BenchmarkComputePosition
     @Benchmark
     public long computePositionWithDivision()
     {
-        return (int) ((Integer.toUnsignedLong(Long.hashCode(hashcode)) * hashTableSize) / (1 << 32));
+        return (int) ((Integer.toUnsignedLong(Long.hashCode(hashcode)) * hashTableSize) / (1L << 32));
     }
 
     public static void main(String[] args)
             throws Exception
     {
-        Options options = new OptionsBuilder()
-                .verbosity(VerboseMode.NORMAL)
-                .include(".*" + BenchmarkComputePosition.class.getSimpleName() + ".*")
-                .build();
-
-        new Runner(options).run();
+        benchmark(BenchmarkComputePosition.class).run();
     }
 }

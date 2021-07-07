@@ -23,8 +23,12 @@ import io.trino.sql.planner.plan.LimitNode;
 import io.trino.sql.planner.plan.PlanNode;
 import io.trino.sql.planner.plan.TableScanNode;
 
+import java.util.Optional;
+
 import static io.trino.SystemSessionProperties.isAllowPushdownIntoConnectors;
 import static io.trino.matching.Capture.newCapture;
+import static io.trino.sql.planner.iterative.rule.Rules.deriveTableStatisticsForPushdown;
+import static io.trino.sql.planner.plan.Patterns.Limit.requiresPreSortedInputs;
 import static io.trino.sql.planner.plan.Patterns.limit;
 import static io.trino.sql.planner.plan.Patterns.source;
 import static io.trino.sql.planner.plan.Patterns.tableScan;
@@ -35,6 +39,8 @@ public class PushLimitIntoTableScan
     private static final Capture<TableScanNode> TABLE_SCAN = newCapture();
     private static final Pattern<LimitNode> PATTERN = limit()
             .matching(limit -> !limit.isWithTies())
+            // Currently ConnectorMetadata#applyLimit does not handle Limit with pre-sorted inputs
+            .with(requiresPreSortedInputs().equalTo(false))
             .with(source().matching(
                     tableScan().capturedAs(TABLE_SCAN)));
 
@@ -70,7 +76,14 @@ public class PushLimitIntoTableScan
                             tableScan.getOutputSymbols(),
                             tableScan.getAssignments(),
                             tableScan.getEnforcedConstraint(),
-                            tableScan.isForDelete());
+                            deriveTableStatisticsForPushdown(
+                                    context.getStatsProvider(),
+                                    context.getSession(),
+                                    result.isPrecalculateStatistics(),
+                                    result.isLimitGuaranteed() ? limit : tableScan),
+                            tableScan.isUpdateTarget(),
+                            // table scan partitioning might have changed with new table handle
+                            Optional.empty());
 
                     if (!result.isLimitGuaranteed()) {
                         node = new LimitNode(limit.getId(), node, limit.getCount(), limit.isPartial());

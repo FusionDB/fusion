@@ -16,8 +16,6 @@ package io.trino.cli;
 import com.google.common.base.CharMatcher;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
-import io.airlift.log.Logging;
-import io.airlift.log.LoggingConfiguration;
 import io.airlift.units.Duration;
 import io.trino.cli.ClientOptions.OutputFormat;
 import io.trino.cli.Trino.VersionProvider;
@@ -31,6 +29,7 @@ import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
 import org.jline.terminal.Terminal;
 import org.jline.utils.AttributedStringBuilder;
+import org.jline.utils.InfoCmp;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
@@ -53,7 +52,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.StandardSystemProperty.USER_HOME;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Strings.nullToEmpty;
-import static com.google.common.io.ByteStreams.nullOutputStream;
 import static com.google.common.io.Files.asCharSource;
 import static com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly;
 import static io.trino.cli.Completion.commandCompleter;
@@ -110,8 +108,6 @@ public class Console
         boolean hasQuery = clientOptions.execute != null;
         boolean isFromFile = !isNullOrEmpty(clientOptions.file);
 
-        initializeLogging(clientOptions.logLevelsFile);
-
         String query = clientOptions.execute;
         if (hasQuery) {
             query += ";";
@@ -161,25 +157,27 @@ public class Console
         try (QueryRunner queryRunner = new QueryRunner(
                 session,
                 clientOptions.debug,
-                Optional.ofNullable(clientOptions.socksProxy),
-                Optional.ofNullable(clientOptions.httpProxy),
-                Optional.ofNullable(clientOptions.keystorePath),
-                Optional.ofNullable(clientOptions.keystorePassword),
-                Optional.ofNullable(clientOptions.keystoreType),
-                Optional.ofNullable(clientOptions.truststorePath),
-                Optional.ofNullable(clientOptions.truststorePassword),
-                Optional.ofNullable(clientOptions.truststoreType),
+                clientOptions.networkLogging,
+                clientOptions.socksProxy,
+                clientOptions.httpProxy,
+                clientOptions.keystorePath,
+                clientOptions.keystorePassword,
+                clientOptions.keystoreType,
+                clientOptions.truststorePath,
+                clientOptions.truststorePassword,
+                clientOptions.truststoreType,
                 clientOptions.insecure,
-                Optional.ofNullable(clientOptions.accessToken),
-                Optional.ofNullable(clientOptions.user),
+                clientOptions.accessToken,
+                clientOptions.user,
                 clientOptions.password ? Optional.of(getPassword()) : Optional.empty(),
-                Optional.ofNullable(clientOptions.krb5Principal),
-                Optional.ofNullable(clientOptions.krb5ServicePrincipalPattern),
-                Optional.ofNullable(clientOptions.krb5RemoteServiceName),
-                Optional.ofNullable(clientOptions.krb5ConfigPath),
-                Optional.ofNullable(clientOptions.krb5KeytabPath),
-                Optional.ofNullable(clientOptions.krb5CredentialCachePath),
-                !clientOptions.krb5DisableRemoteServiceHostnameCanonicalization)) {
+                clientOptions.krb5Principal,
+                clientOptions.krb5ServicePrincipalPattern,
+                clientOptions.krb5RemoteServiceName,
+                clientOptions.krb5ConfigPath,
+                clientOptions.krb5KeytabPath,
+                clientOptions.krb5CredentialCachePath,
+                !clientOptions.krb5DisableRemoteServiceHostnameCanonicalization,
+                clientOptions.externalAuthentication)) {
             if (hasQuery) {
                 return executeCommand(
                         queryRunner,
@@ -201,7 +199,7 @@ public class Console
 
     private String getPassword()
     {
-        checkState(clientOptions.user != null, "Username must be specified along with password");
+        checkState(clientOptions.user.isPresent(), "Username must be specified along with password");
         String defaultPassword = System.getenv("TRINO_PASSWORD");
         if (defaultPassword != null) {
             return defaultPassword;
@@ -258,6 +256,11 @@ public class Console
                     case "exit":
                     case "quit":
                         return;
+                    case "clear":
+                        Terminal terminal = reader.getTerminal();
+                        terminal.puts(InfoCmp.Capability.clear_screen);
+                        terminal.flush();
+                        continue;
                     case "history":
                         for (History.Entry entry : reader.getHistory()) {
                             System.out.println(new AttributedStringBuilder()
@@ -429,33 +432,5 @@ public class Console
             return Paths.get(path);
         }
         return Paths.get(nullToEmpty(USER_HOME.value()), ".trino_history");
-    }
-
-    private static void initializeLogging(String logLevelsFile)
-    {
-        // unhook out and err while initializing logging or logger will print to them
-        PrintStream out = System.out;
-        PrintStream err = System.err;
-
-        try {
-            LoggingConfiguration config = new LoggingConfiguration();
-
-            if (logLevelsFile == null) {
-                System.setOut(new PrintStream(nullOutputStream()));
-                System.setErr(new PrintStream(nullOutputStream()));
-
-                config.setConsoleEnabled(false);
-            }
-            else {
-                config.setLevelsFile(logLevelsFile);
-            }
-
-            Logging logging = Logging.initialize();
-            logging.configure(config);
-        }
-        finally {
-            System.setOut(out);
-            System.setErr(err);
-        }
     }
 }

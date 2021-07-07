@@ -19,6 +19,8 @@ import io.trino.Session;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.plugin.tpch.TpchConnectorFactory;
+import io.trino.spi.connector.CatalogSchemaTableName;
+import io.trino.spi.connector.ConnectorMaterializedViewDefinition;
 import io.trino.spi.connector.ConnectorViewDefinition;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.Identity;
@@ -74,10 +76,40 @@ public class TestColumnMask
                 Optional.of(VIEW_OWNER),
                 false);
 
+        ConnectorMaterializedViewDefinition materializedView = new ConnectorMaterializedViewDefinition(
+                "SELECT * FROM local.tiny.nation",
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableList.of(
+                        new ConnectorMaterializedViewDefinition.Column("nationkey", BigintType.BIGINT.getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("name", VarcharType.createVarcharType(25).getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("regionkey", BigintType.BIGINT.getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("comment", VarcharType.createVarcharType(152).getTypeId())),
+                Optional.empty(),
+                VIEW_OWNER,
+                ImmutableMap.of());
+
+        ConnectorMaterializedViewDefinition freshMaterializedView = new ConnectorMaterializedViewDefinition(
+                "SELECT * FROM local.tiny.nation",
+                Optional.of(new CatalogSchemaTableName("local", "tiny", "nation")),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableList.of(
+                        new ConnectorMaterializedViewDefinition.Column("nationkey", BigintType.BIGINT.getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("name", VarcharType.createVarcharType(25).getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("regionkey", BigintType.BIGINT.getTypeId()),
+                        new ConnectorMaterializedViewDefinition.Column("comment", VarcharType.createVarcharType(152).getTypeId())),
+                Optional.empty(),
+                VIEW_OWNER,
+                ImmutableMap.of());
+
         MockConnectorFactory mock = MockConnectorFactory.builder()
-                .withGetViews((s, prefix) -> ImmutableMap.<SchemaTableName, ConnectorViewDefinition>builder()
-                        .put(new SchemaTableName("default", "nation_view"), view)
-                        .build())
+                .withGetViews((s, prefix) -> ImmutableMap.of(
+                        new SchemaTableName("default", "nation_view"), view))
+                .withGetMaterializedViews((s, prefix) -> ImmutableMap.of(
+                        new SchemaTableName("default", "nation_materialized_view"), materializedView,
+                        new SchemaTableName("default", "nation_fresh_materialized_view"), freshMaterializedView))
                 .build();
 
         runner.createCatalog(MOCK_CATALOG, mock, ImmutableMap.of());
@@ -203,6 +235,37 @@ public class TestColumnMask
                 USER,
                 new ViewExpression(USER, Optional.of(CATALOG), Optional.of("tiny"), "(SELECT cast(max(name) AS VARCHAR(15)) FROM nation WHERE nationkey = orderkey)"));
         assertThat(assertions.query("SELECT clerk FROM orders WHERE orderkey = 1")).matches("VALUES CAST('ARGENTINA' AS VARCHAR(15))");
+    }
+
+    @Test
+    public void testMaterializedView()
+    {
+        // mask materialized view columns
+        accessControl.reset();
+        accessControl.columnMask(
+                new QualifiedObjectName(MOCK_CATALOG, "default", "nation_fresh_materialized_view"),
+                "name",
+                USER,
+                new ViewExpression(USER, Optional.empty(), Optional.empty(), "reverse(name)"));
+        accessControl.columnMask(
+                new QualifiedObjectName(MOCK_CATALOG, "default", "nation_materialized_view"),
+                "name",
+                USER,
+                new ViewExpression(USER, Optional.empty(), Optional.empty(), "reverse(name)"));
+
+        assertThat(assertions.query(
+                Session.builder(SESSION)
+                        .setIdentity(Identity.forUser(USER).build())
+                        .build(),
+                "SELECT name FROM mock.default.nation_fresh_materialized_view WHERE nationkey = 1"))
+                .matches("VALUES CAST('ANITNEGRA' AS VARCHAR(25))");
+
+        assertThat(assertions.query(
+                Session.builder(SESSION)
+                        .setIdentity(Identity.forUser(USER).build())
+                        .build(),
+                "SELECT name FROM mock.default.nation_materialized_view WHERE nationkey = 1"))
+                .matches("VALUES CAST('ANITNEGRA' AS VARCHAR(25))");
     }
 
     @Test
@@ -359,7 +422,7 @@ public class TestColumnMask
                 new ViewExpression(USER, Optional.of(CATALOG), Optional.of("tiny"), "orderkey"));
         assertThatThrownBy(() -> assertions.query(
                 "SELECT (SELECT min(custkey) FROM customer WHERE customer.custkey = orders.custkey) FROM orders"))
-                .hasMessageMatching("\\Qline 1:34: Invalid column mask for 'local.tiny.customer.custkey': Column 'orderkey' cannot be resolved\\E");
+                .hasMessage("line 1:34: Invalid column mask for 'local.tiny.customer.custkey': Column 'orderkey' cannot be resolved");
     }
 
     @Test
@@ -389,7 +452,7 @@ public class TestColumnMask
                 new ViewExpression(RUN_AS_USER, Optional.of(CATALOG), Optional.of("tiny"), "$$$"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:22: Invalid column mask for 'local.tiny.orders.orderkey': mismatched input '$'. Expecting: <expression>\\E");
+                .hasMessage("line 1:22: Invalid column mask for 'local.tiny.orders.orderkey': mismatched input '$'. Expecting: <expression>");
 
         // unknown column
         accessControl.reset();
@@ -400,7 +463,7 @@ public class TestColumnMask
                 new ViewExpression(RUN_AS_USER, Optional.of(CATALOG), Optional.of("tiny"), "unknown_column"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:22: Invalid column mask for 'local.tiny.orders.orderkey': Column 'unknown_column' cannot be resolved\\E");
+                .hasMessage("line 1:22: Invalid column mask for 'local.tiny.orders.orderkey': Column 'unknown_column' cannot be resolved");
 
         // invalid type
         accessControl.reset();
@@ -411,7 +474,7 @@ public class TestColumnMask
                 new ViewExpression(RUN_AS_USER, Optional.of(CATALOG), Optional.of("tiny"), "'foo'"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:22: Expected column mask for 'local.tiny.orders.orderkey' to be of type bigint, but was varchar(3)\\E");
+                .hasMessage("line 1:22: Expected column mask for 'local.tiny.orders.orderkey' to be of type bigint, but was varchar(3)");
 
         // aggregation
         accessControl.reset();
@@ -422,7 +485,7 @@ public class TestColumnMask
                 new ViewExpression(RUN_AS_USER, Optional.of(CATALOG), Optional.of("tiny"), "count(*) > 0"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:10: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [count(*)]\\E");
+                .hasMessage("line 1:10: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [count(*)]");
 
         // window function
         accessControl.reset();
@@ -433,7 +496,7 @@ public class TestColumnMask
                 new ViewExpression(RUN_AS_USER, Optional.of(CATALOG), Optional.of("tiny"), "row_number() OVER () > 0"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:22: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [row_number() OVER ()]\\E");
+                .hasMessage("line 1:22: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [row_number() OVER ()]");
 
         // grouping function
         accessControl.reset();
@@ -444,7 +507,7 @@ public class TestColumnMask
                 new ViewExpression(USER, Optional.of(CATALOG), Optional.of("tiny"), "grouping(orderkey) = 0"));
 
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\Qline 1:20: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [GROUPING (orderkey)]\\E");
+                .hasMessage("line 1:20: Column mask for 'orders.orderkey' cannot contain aggregations, window functions or grouping operations: [GROUPING (orderkey)]");
     }
 
     @Test
@@ -459,16 +522,16 @@ public class TestColumnMask
 
         assertThat(assertions.query("SHOW STATS FOR (SELECT * FROM orders)"))
                 .containsAll("VALUES " +
-                        "(CAST('orderkey' AS varchar), CAST(NULL AS double), 1e0, 0e1, NULL, '7', '7')," +
-                        "(CAST('clerk' AS varchar), 15e3, 1e3, 0e1, NULL, CAST(NULL AS varchar), CAST(NULL AS varchar))," +
+                        "(VARCHAR 'orderkey', CAST(NULL AS double), 1e0, 0e1, NULL, '7', '7')," +
+                        "(VARCHAR 'clerk', 15e3, 1e3, 0e1, NULL, CAST(NULL AS varchar), CAST(NULL AS varchar))," +
                         "(NULL, NULL, NULL, NULL, 15e3, NULL, NULL)");
         assertThat(assertions.query("SHOW STATS FOR (SELECT orderkey FROM orders)"))
                 .matches("VALUES " +
-                        "(CAST('orderkey' AS varchar), CAST(NULL AS double), 1e0, 0e1, NULL, CAST('7' AS varchar), CAST('7' AS varchar))," +
+                        "(VARCHAR 'orderkey', CAST(NULL AS double), 1e0, 0e1, NULL, VARCHAR '7', VARCHAR '7')," +
                         "(NULL, NULL, NULL, NULL, 15e3, NULL, NULL)");
         assertThat(assertions.query("SHOW STATS FOR (SELECT clerk FROM orders)"))
                 .matches("VALUES " +
-                        "(CAST('clerk' AS varchar), 15e3, 1e3, 0e1, NULL, CAST(NULL AS varchar), CAST(NULL AS varchar))," +
+                        "(VARCHAR 'clerk', 15e3, 1e3, 0e1, NULL, CAST(NULL AS varchar), CAST(NULL AS varchar))," +
                         "(NULL, NULL, NULL, NULL, 15e3, NULL, NULL)");
     }
 
@@ -511,7 +574,7 @@ public class TestColumnMask
                 USER,
                 new ViewExpression(USER, Optional.empty(), Optional.empty(), "custkey"));
         assertThatThrownBy(() -> assertions.query("SELECT orderkey FROM orders"))
-                .hasMessageMatching("\\QAccess Denied: Cannot select from columns [orderkey, custkey] in table or view local.tiny.orders");
+                .hasMessage("Access Denied: Cannot select from columns [orderkey, custkey] in table or view local.tiny.orders");
     }
 
     @Test
@@ -524,7 +587,7 @@ public class TestColumnMask
                 USER,
                 new ViewExpression(USER, Optional.empty(), Optional.empty(), "clerk"));
         assertThatThrownBy(() -> assertions.query("INSERT INTO orders SELECT * FROM orders"))
-                .hasMessageMatching("\\QInsert into table with column masks");
+                .hasMessage("Insert into table with column masks is not supported");
     }
 
     @Test
@@ -537,7 +600,24 @@ public class TestColumnMask
                 USER,
                 new ViewExpression(USER, Optional.empty(), Optional.empty(), "clerk"));
         assertThatThrownBy(() -> assertions.query("DELETE FROM orders"))
-                .hasMessageMatching("\\Qline 1:1: Delete from table with column mask");
+                .hasMessage("line 1:1: Delete from table with column mask");
+    }
+
+    @Test
+    public void testUpdateWithColumnMasking()
+    {
+        accessControl.reset();
+        accessControl.columnMask(
+                new QualifiedObjectName(CATALOG, "tiny", "orders"),
+                "clerk",
+                USER,
+                new ViewExpression(USER, Optional.empty(), Optional.empty(), "clerk"));
+        assertThatThrownBy(() -> assertions.query("UPDATE orders SET clerk = 'X'"))
+                .hasMessage("line 1:1: Updating a table with column masks is not supported");
+        assertThatThrownBy(() -> assertions.query("UPDATE orders SET orderkey = -orderkey"))
+                .hasMessage("line 1:1: Updating a table with column masks is not supported");
+        assertThatThrownBy(() -> assertions.query("UPDATE orders SET clerk = 'X', orderkey = -orderkey"))
+                .hasMessage("line 1:1: Updating a table with column masks is not supported");
     }
 
     @Test

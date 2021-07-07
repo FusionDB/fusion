@@ -35,6 +35,7 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_NON_TRANSIENT_ERROR;
+import static io.trino.plugin.jdbc.JdbcMetadataSessionProperties.getInsertBatchSize;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
@@ -46,6 +47,7 @@ public class JdbcPageSink
 
     private final List<Type> columnTypes;
     private final List<WriteFunction> columnWriters;
+    private final int maxBatchSize;
     private int batchSize;
 
     public JdbcPageSink(ConnectorSession session, JdbcOutputTableHandle handle, JdbcClient jdbcClient)
@@ -54,14 +56,6 @@ public class JdbcPageSink
             connection = jdbcClient.getConnection(session, handle);
         }
         catch (SQLException e) {
-            throw new TrinoException(JDBC_ERROR, e);
-        }
-
-        try {
-            connection.setAutoCommit(false);
-        }
-        catch (SQLException e) {
-            closeWithSuppression(connection, e);
             throw new TrinoException(JDBC_ERROR, e);
         }
 
@@ -92,12 +86,16 @@ public class JdbcPageSink
         }
 
         try {
+            // Per JDBC specification, auto-commit mode is the default. Verify that in case pooling or custom ConnectionFactory is used.
+            verify(connection.getAutoCommit(), "Connection not in auto-commit");
             statement = connection.prepareStatement(jdbcClient.buildInsertSql(handle, columnWriters));
         }
         catch (SQLException e) {
             closeWithSuppression(connection, e);
             throw new TrinoException(JDBC_ERROR, e);
         }
+
+        this.maxBatchSize = getInsertBatchSize(session);
     }
 
     @Override
@@ -112,10 +110,8 @@ public class JdbcPageSink
                 statement.addBatch();
                 batchSize++;
 
-                if (batchSize >= 1000) {
+                if (batchSize >= maxBatchSize) {
                     statement.executeBatch();
-                    connection.commit();
-                    connection.setAutoCommit(false);
                     batchSize = 0;
                 }
             }
@@ -165,7 +161,6 @@ public class JdbcPageSink
                 PreparedStatement statement = this.statement) {
             if (batchSize > 0) {
                 statement.executeBatch();
-                connection.commit();
             }
         }
         catch (SQLNonTransientException e) {
@@ -186,17 +181,12 @@ public class JdbcPageSink
         return completedFuture(ImmutableList.of());
     }
 
-    @SuppressWarnings("unused")
     @Override
     public void abort()
     {
-        // rollback and close
-        try (Connection connection = this.connection;
-                PreparedStatement statement = this.statement) {
-            // skip rollback if implicitly closed due to an error
-            if (!connection.isClosed()) {
-                connection.rollback();
-            }
+        // close statement and connection
+        try (connection) {
+            statement.close();
         }
         catch (SQLException e) {
             throw new TrinoException(JDBC_ERROR, e);

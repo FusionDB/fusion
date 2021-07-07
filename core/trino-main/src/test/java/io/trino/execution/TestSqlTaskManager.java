@@ -36,6 +36,7 @@ import io.trino.operator.ExchangeClientSupplier;
 import io.trino.spi.QueryId;
 import io.trino.spiller.LocalSpillManager;
 import io.trino.spiller.NodeSpillConfig;
+import io.trino.version.EmbedVersion;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
@@ -63,7 +64,6 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
-@Test
 public class TestSqlTaskManager
 {
     private static final TaskId TASK_ID = new TaskId("query", 0, 1);
@@ -297,6 +297,7 @@ public class TestSqlTaskManager
     private SqlTaskManager createSqlTaskManager(TaskManagerConfig taskManagerConfig, NodeMemoryConfig nodeMemoryConfig)
     {
         return new SqlTaskManager(
+                new EmbedVersion("testversion"),
                 createTestingPlanner(),
                 new MockLocationFactory(),
                 taskExecutor,

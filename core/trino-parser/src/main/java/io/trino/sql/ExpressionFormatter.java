@@ -32,7 +32,9 @@ import io.trino.sql.tree.CharLiteral;
 import io.trino.sql.tree.CoalesceExpression;
 import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.Cube;
+import io.trino.sql.tree.CurrentCatalog;
 import io.trino.sql.tree.CurrentPath;
+import io.trino.sql.tree.CurrentSchema;
 import io.trino.sql.tree.CurrentTime;
 import io.trino.sql.tree.CurrentUser;
 import io.trino.sql.tree.DateTimeDataType;
@@ -59,6 +61,7 @@ import io.trino.sql.tree.IntervalDayTimeDataType;
 import io.trino.sql.tree.IntervalLiteral;
 import io.trino.sql.tree.IsNotNullPredicate;
 import io.trino.sql.tree.IsNullPredicate;
+import io.trino.sql.tree.LabelDereference;
 import io.trino.sql.tree.LambdaArgumentDeclaration;
 import io.trino.sql.tree.LambdaExpression;
 import io.trino.sql.tree.LikePredicate;
@@ -78,6 +81,7 @@ import io.trino.sql.tree.RowDataType;
 import io.trino.sql.tree.SearchedCaseExpression;
 import io.trino.sql.tree.SimpleCaseExpression;
 import io.trino.sql.tree.SimpleGroupBy;
+import io.trino.sql.tree.SkipTo;
 import io.trino.sql.tree.SortItem;
 import io.trino.sql.tree.StringLiteral;
 import io.trino.sql.tree.SubqueryExpression;
@@ -90,6 +94,9 @@ import io.trino.sql.tree.TypeParameter;
 import io.trino.sql.tree.WhenClause;
 import io.trino.sql.tree.Window;
 import io.trino.sql.tree.WindowFrame;
+import io.trino.sql.tree.WindowOperation;
+import io.trino.sql.tree.WindowReference;
+import io.trino.sql.tree.WindowSpecification;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -98,13 +105,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.PrimitiveIterator;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.trino.sql.RowPatternFormatter.formatPattern;
 import static io.trino.sql.SqlFormatter.formatName;
 import static io.trino.sql.SqlFormatter.formatSql;
 import static java.lang.String.format;
+import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 
 public final class ExpressionFormatter
@@ -154,6 +163,18 @@ public final class ExpressionFormatter
                     .append(process(node.getValue(), context))
                     .append(" AT TIME ZONE ")
                     .append(process(node.getTimeZone(), context)).toString();
+        }
+
+        @Override
+        protected String visitCurrentCatalog(CurrentCatalog node, Void context)
+        {
+            return "CURRENT_CATALOG";
+        }
+
+        @Override
+        protected String visitCurrentSchema(CurrentSchema node, Void context)
+        {
+            return "CURRENT_SCHEMA";
         }
 
         @Override
@@ -361,6 +382,11 @@ public final class ExpressionFormatter
         {
             StringBuilder builder = new StringBuilder();
 
+            if (node.getProcessingMode().isPresent()) {
+                builder.append(node.getProcessingMode().get().getMode())
+                        .append(" ");
+            }
+
             String arguments = joinExpressions(node.getArguments());
             if (node.getArguments().isEmpty() && "count".equalsIgnoreCase(node.getName().getSuffix())) {
                 arguments = "*";
@@ -394,10 +420,16 @@ public final class ExpressionFormatter
             }
 
             if (node.getWindow().isPresent()) {
-                builder.append(" OVER ").append(visitWindow(node.getWindow().get(), context));
+                builder.append(" OVER ").append(formatWindow(node.getWindow().get()));
             }
 
             return builder.toString();
+        }
+
+        @Override
+        protected String visitWindowOperation(WindowOperation node, Void context)
+        {
+            return process(node.getName(), context) + " OVER " + formatWindow(node.getWindow());
         }
 
         @Override
@@ -503,9 +535,8 @@ public final class ExpressionFormatter
                     return "-(" + value + ")";
                 case PLUS:
                     return "+" + value;
-                default:
-                    throw new UnsupportedOperationException("Unsupported sign: " + node.getSign());
             }
+            throw new UnsupportedOperationException("Unsupported sign: " + node.getSign());
         }
 
         @Override
@@ -630,62 +661,6 @@ public final class ExpressionFormatter
         }
 
         @Override
-        public String visitWindow(Window node, Void context)
-        {
-            List<String> parts = new ArrayList<>();
-
-            if (!node.getPartitionBy().isEmpty()) {
-                parts.add("PARTITION BY " + joinExpressions(node.getPartitionBy()));
-            }
-            if (node.getOrderBy().isPresent()) {
-                parts.add(formatOrderBy(node.getOrderBy().get()));
-            }
-            if (node.getFrame().isPresent()) {
-                parts.add(process(node.getFrame().get(), context));
-            }
-
-            return '(' + Joiner.on(' ').join(parts) + ')';
-        }
-
-        @Override
-        public String visitWindowFrame(WindowFrame node, Void context)
-        {
-            StringBuilder builder = new StringBuilder();
-
-            builder.append(node.getType().toString()).append(' ');
-
-            if (node.getEnd().isPresent()) {
-                builder.append("BETWEEN ")
-                        .append(process(node.getStart(), context))
-                        .append(" AND ")
-                        .append(process(node.getEnd().get(), context));
-            }
-            else {
-                builder.append(process(node.getStart(), context));
-            }
-
-            return builder.toString();
-        }
-
-        @Override
-        public String visitFrameBound(FrameBound node, Void context)
-        {
-            switch (node.getType()) {
-                case UNBOUNDED_PRECEDING:
-                    return "UNBOUNDED PRECEDING";
-                case PRECEDING:
-                    return process(node.getValue().get(), context) + " PRECEDING";
-                case CURRENT_ROW:
-                    return "CURRENT ROW";
-                case FOLLOWING:
-                    return process(node.getValue().get(), context) + " FOLLOWING";
-                case UNBOUNDED_FOLLOWING:
-                    return "UNBOUNDED FOLLOWING";
-            }
-            throw new IllegalArgumentException("unhandled type: " + node.getType());
-        }
-
-        @Override
         protected String visitQuantifiedComparisonExpression(QuantifiedComparisonExpression node, Void context)
         {
             return new StringBuilder()
@@ -712,7 +687,7 @@ public final class ExpressionFormatter
         {
             return node.getFields().stream()
                     .map(this::process)
-                    .collect(Collectors.joining(", ", "ROW(", ")"));
+                    .collect(joining(", ", "ROW(", ")"));
         }
 
         @Override
@@ -739,7 +714,7 @@ public final class ExpressionFormatter
             if (!node.getArguments().isEmpty()) {
                 result.append(node.getArguments().stream()
                         .map(this::process)
-                        .collect(Collectors.joining(", ", "(", ")")));
+                        .collect(joining(", ", "(", ")")));
             }
 
             return result.toString();
@@ -789,6 +764,16 @@ public final class ExpressionFormatter
             }
 
             return builder.toString();
+        }
+
+        @Override
+        protected String visitLabelDereference(LabelDereference node, Void context)
+        {
+            // format LabelDereference L.x as "LABEL_DEREFERENCE("L", "x")"
+            // LabelDereference, like SymbolReference, is an IR-type expression. It is never a result of the parser.
+            // After being formatted this way for serialization, it will be parsed as functionCall
+            // and swapped back for LabelDereference.
+            return "LABEL_DEREFERENCE(" + formatIdentifier(node.getLabel()) + ", " + process(node.getReference()) + ")";
         }
 
         private String formatBinaryExpression(String operator, Expression left, Expression right)
@@ -847,6 +832,124 @@ public final class ExpressionFormatter
         return Joiner.on(", ").join(sortItems.stream()
                 .map(sortItemFormatterFunction())
                 .iterator());
+    }
+
+    private static String formatWindow(Window window)
+    {
+        if (window instanceof WindowReference) {
+            return formatExpression(((WindowReference) window).getName());
+        }
+
+        return formatWindowSpecification((WindowSpecification) window);
+    }
+
+    static String formatWindowSpecification(WindowSpecification windowSpecification)
+    {
+        List<String> parts = new ArrayList<>();
+
+        if (windowSpecification.getExistingWindowName().isPresent()) {
+            parts.add(formatExpression(windowSpecification.getExistingWindowName().get()));
+        }
+        if (!windowSpecification.getPartitionBy().isEmpty()) {
+            parts.add("PARTITION BY " + windowSpecification.getPartitionBy().stream()
+                    .map(ExpressionFormatter::formatExpression)
+                    .collect(joining(", ")));
+        }
+        if (windowSpecification.getOrderBy().isPresent()) {
+            parts.add(formatOrderBy(windowSpecification.getOrderBy().get()));
+        }
+        if (windowSpecification.getFrame().isPresent()) {
+            parts.add(formatFrame(windowSpecification.getFrame().get()));
+        }
+
+        return '(' + Joiner.on(' ').join(parts) + ')';
+    }
+
+    private static String formatFrame(WindowFrame windowFrame)
+    {
+        StringBuilder builder = new StringBuilder();
+
+        if (!windowFrame.getMeasures().isEmpty()) {
+            builder.append("MEASURES ")
+                    .append(windowFrame.getMeasures().stream()
+                            .map(measure -> formatExpression(measure.getExpression()) + " AS " + formatExpression(measure.getName()))
+                            .collect(joining(", ")))
+                    .append(" ");
+        }
+
+        builder.append(windowFrame.getType().toString())
+                .append(' ');
+
+        if (windowFrame.getEnd().isPresent()) {
+            builder.append("BETWEEN ")
+                    .append(formatFrameBound(windowFrame.getStart()))
+                    .append(" AND ")
+                    .append(formatFrameBound(windowFrame.getEnd().get()));
+        }
+        else {
+            builder.append(formatFrameBound(windowFrame.getStart()));
+        }
+
+        windowFrame.getAfterMatchSkipTo().ifPresent(skipTo ->
+                builder.append(" ")
+                        .append(formatSkipTo(skipTo)));
+        windowFrame.getPatternSearchMode().ifPresent(searchMode ->
+                builder.append(" ")
+                        .append(searchMode.getMode().name()));
+        windowFrame.getPattern().ifPresent(pattern ->
+                builder.append(" PATTERN(")
+                        .append(formatPattern(pattern))
+                        .append(")"));
+        if (!windowFrame.getSubsets().isEmpty()) {
+            builder.append(" SUBSET ");
+            builder.append(windowFrame.getSubsets().stream()
+                    .map(subset -> formatExpression(subset.getName()) + " = " + subset.getIdentifiers().stream()
+                            .map(ExpressionFormatter::formatExpression).collect(joining(", ", "(", ")")))
+                    .collect(joining(", ")));
+        }
+        if (!windowFrame.getVariableDefinitions().isEmpty()) {
+            builder.append(" DEFINE ");
+            builder.append(windowFrame.getVariableDefinitions().stream()
+                    .map(variable -> formatExpression(variable.getName()) + " AS " + formatExpression(variable.getExpression()))
+                    .collect(joining(", ")));
+        }
+
+        return builder.toString();
+    }
+
+    private static String formatFrameBound(FrameBound frameBound)
+    {
+        switch (frameBound.getType()) {
+            case UNBOUNDED_PRECEDING:
+                return "UNBOUNDED PRECEDING";
+            case PRECEDING:
+                return formatExpression(frameBound.getValue().get()) + " PRECEDING";
+            case CURRENT_ROW:
+                return "CURRENT ROW";
+            case FOLLOWING:
+                return formatExpression(frameBound.getValue().get()) + " FOLLOWING";
+            case UNBOUNDED_FOLLOWING:
+                return "UNBOUNDED FOLLOWING";
+        }
+        throw new IllegalArgumentException("unhandled type: " + frameBound.getType());
+    }
+
+    public static String formatSkipTo(SkipTo skipTo)
+    {
+        switch (skipTo.getPosition()) {
+            case PAST_LAST:
+                return "AFTER MATCH SKIP PAST LAST ROW";
+            case NEXT:
+                return "AFTER MATCH SKIP TO NEXT ROW";
+            case LAST:
+                checkState(skipTo.getIdentifier().isPresent(), "missing identifier in AFTER MATCH SKIP TO LAST");
+                return "AFTER MATCH SKIP TO LAST " + formatExpression(skipTo.getIdentifier().get());
+            case FIRST:
+                checkState(skipTo.getIdentifier().isPresent(), "missing identifier in AFTER MATCH SKIP TO FIRST");
+                return "AFTER MATCH SKIP TO FIRST " + formatExpression(skipTo.getIdentifier().get());
+            default:
+                throw new IllegalStateException("unexpected skipTo: " + skipTo);
+        }
     }
 
     static String formatGroupBy(List<GroupingElement> groupingElements)

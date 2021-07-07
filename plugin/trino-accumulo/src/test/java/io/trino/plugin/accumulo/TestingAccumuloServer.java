@@ -46,10 +46,14 @@ public class TestingAccumuloServer
 
     private TestingAccumuloServer()
     {
-        accumuloContainer = new FixedHostPortGenericContainer<>("prestodev/accumulo:37");
+        accumuloContainer = new FixedHostPortGenericContainer<>("ghcr.io/trinodb/testing/accumulo");
         accumuloContainer.withFixedExposedPort(ACCUMULO_MASTER_PORT, ACCUMULO_MASTER_PORT);
         accumuloContainer.withFixedExposedPort(ACCUMULO_TSERVER_PORT, ACCUMULO_TSERVER_PORT);
         accumuloContainer.withExposedPorts(ZOOKEEPER_PORT);
+        accumuloContainer.withCreateContainerCmdModifier(cmd -> cmd
+                .withHostName("localhost")
+                .withEnv("ADDRESS=0.0.0.0")
+                .withEntrypoint("supervisord", "-c", "/etc/supervisord.conf"));
         accumuloContainer.waitingFor(Wait.forHealthcheck().withStartupTimeout(Duration.ofMinutes(10)));
         accumuloContainer.withCopyFileToContainer(forClasspathResource(ITERATORS_JAR), ACCUMULO_EXT_PATH + "/" + ITERATORS_JAR);
 

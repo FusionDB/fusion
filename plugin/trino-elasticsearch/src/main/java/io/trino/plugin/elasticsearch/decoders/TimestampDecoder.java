@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.elasticsearch.decoders;
 
+import com.google.common.primitives.Longs;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.BlockBuilder;
 import org.elasticsearch.common.document.DocumentField;
@@ -20,8 +21,6 @@ import org.elasticsearch.search.SearchHit;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.function.Supplier;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -29,13 +28,13 @@ import static io.trino.spi.StandardErrorCode.TYPE_MISMATCH;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
 import static java.lang.String.format;
+import static java.time.ZoneOffset.UTC;
 import static java.time.format.DateTimeFormatter.ISO_DATE_TIME;
 import static java.util.Objects.requireNonNull;
 
 public class TimestampDecoder
         implements Decoder
 {
-    private static final ZoneId ZULU = ZoneId.of("Z");
     private final String path;
 
     public TimestampDecoder(String path)
@@ -65,10 +64,17 @@ public class TimestampDecoder
         else {
             LocalDateTime timestamp;
             if (value instanceof String) {
-                timestamp = ISO_DATE_TIME.parse((String) value, LocalDateTime::from);
+                String valueString = (String) value;
+                Long epochMillis = Longs.tryParse(valueString);
+                if (epochMillis != null) {
+                    timestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), UTC);
+                }
+                else {
+                    timestamp = ISO_DATE_TIME.parse(valueString, LocalDateTime::from);
+                }
             }
             else if (value instanceof Number) {
-                timestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(((Number) value).longValue()), ZULU);
+                timestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(((Number) value).longValue()), UTC);
             }
             else {
                 throw new TrinoException(NOT_SUPPORTED, format(
@@ -78,7 +84,7 @@ public class TimestampDecoder
                         value.getClass().getSimpleName()));
             }
 
-            long epochMicros = timestamp.atOffset(ZoneOffset.UTC).toInstant().toEpochMilli() * MICROSECONDS_PER_MILLISECOND;
+            long epochMicros = timestamp.atOffset(UTC).toInstant().toEpochMilli() * MICROSECONDS_PER_MILLISECOND;
 
             TIMESTAMP_MILLIS.writeLong(output, epochMicros);
         }

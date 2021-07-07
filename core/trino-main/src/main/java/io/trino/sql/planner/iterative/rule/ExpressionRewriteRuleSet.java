@@ -166,6 +166,7 @@ public class ExpressionRewriteRuleSet
                                         .collect(toImmutableList()))),
                                 aggregation.isDistinct(),
                                 Optional.empty(),
+                                Optional.empty(),
                                 aggregation.getArguments()),
                         context);
                 verify(
@@ -254,6 +255,7 @@ public class ExpressionRewriteRuleSet
                         joinNode.getCriteria(),
                         joinNode.getLeftOutputSymbols(),
                         joinNode.getRightOutputSymbols(),
+                        joinNode.isMaySkipOutputDuplicates(),
                         filter,
                         joinNode.getLeftHashSymbol(),
                         joinNode.getRightHashSymbol(),

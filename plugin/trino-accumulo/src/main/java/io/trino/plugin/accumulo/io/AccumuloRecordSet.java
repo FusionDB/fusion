@@ -41,7 +41,7 @@ import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Implementation of a Presto RecordSet, responsible for returning the column types and the RecordCursor to the framework.
+ * Implementation of a Trino RecordSet, responsible for returning the column types and the RecordCursor to the framework.
  *
  * @see AccumuloRecordCursor
  * @see AccumuloRecordSetProvider
@@ -76,7 +76,7 @@ public class AccumuloRecordSet
         serializer = table.getSerializerInstance();
 
         // Save off the column handles and createa list of the Accumulo types
-        this.columnHandles = requireNonNull(columnHandles, "column handles is null");
+        this.columnHandles = requireNonNull(columnHandles, "columnHandles is null");
         ImmutableList.Builder<Type> types = ImmutableList.builder();
         for (AccumuloColumnHandle column : columnHandles) {
             types.add(column.getType());

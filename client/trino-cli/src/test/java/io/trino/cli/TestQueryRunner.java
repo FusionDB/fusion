@@ -23,6 +23,7 @@ import io.trino.client.ClientTypeSignature;
 import io.trino.client.Column;
 import io.trino.client.QueryResults;
 import io.trino.client.StatementStats;
+import okhttp3.logging.HttpLoggingInterceptor;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.testng.annotations.AfterMethod;
@@ -103,6 +104,7 @@ public class TestQueryRunner
         return new ClientSession(
                 server.url("/").uri(),
                 "user",
+                Optional.empty(),
                 "source",
                 Optional.empty(),
                 ImmutableSet.of(),
@@ -145,6 +147,7 @@ public class TestQueryRunner
         return new QueryRunner(
                 clientSession,
                 false,
+                HttpLoggingInterceptor.Level.NONE,
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
@@ -163,6 +166,7 @@ public class TestQueryRunner
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                false,
                 false);
     }
 

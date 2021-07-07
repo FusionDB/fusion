@@ -56,7 +56,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.plugin.bigquery.BigQueryMetadata.NUMERIC_DATA_TYPE_PRECISION;
 import static io.trino.plugin.bigquery.BigQueryMetadata.NUMERIC_DATA_TYPE_SCALE;
-import static io.trino.plugin.bigquery.BigQueryType.toPrestoTimestamp;
+import static io.trino.plugin.bigquery.BigQueryType.toTrinoTimestamp;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.DateType.DATE;
@@ -76,6 +76,7 @@ public class BigQueryResultPageSource
 
     private final BigQueryStorageClient bigQueryStorageClient;
     private final BigQuerySplit split;
+    private final List<String> columnNames;
     private final List<Type> columnTypes;
     private final AtomicLong readBytes;
     private final PageBuilder pageBuilder;
@@ -90,8 +91,12 @@ public class BigQueryResultPageSource
         this.bigQueryStorageClient = requireNonNull(bigQueryStorageClientFactory, "bigQueryStorageClientFactory is null").createBigQueryStorageClient();
         this.split = requireNonNull(split, "split is null");
         this.readBytes = new AtomicLong();
-        this.columnTypes = requireNonNull(columns, "columns is null").stream()
-                .map(BigQueryColumnHandle::getPrestoType)
+        requireNonNull(columns, "columns is null");
+        this.columnNames = columns.stream()
+                .map(BigQueryColumnHandle::getName)
+                .collect(toImmutableList());
+        this.columnTypes = columns.stream()
+                .map(BigQueryColumnHandle::getTrinoType)
                 .collect(toImmutableList());
         this.pageBuilder = new PageBuilder(columnTypes);
 
@@ -131,7 +136,7 @@ public class BigQueryResultPageSource
             pageBuilder.declarePosition();
             for (int column = 0; column < columnTypes.size(); column++) {
                 BlockBuilder output = pageBuilder.getBlockBuilder(column);
-                appendTo(columnTypes.get(column), record.get(column), output);
+                appendTo(columnTypes.get(column), record.get(columnNames.get(column)), output);
             }
         }
 
@@ -163,7 +168,7 @@ public class BigQueryResultPageSource
                     type.writeLong(output, ((Number) value).intValue());
                 }
                 else if (type.equals(TIMESTAMP_MILLIS)) {
-                    type.writeLong(output, toPrestoTimestamp(((Utf8) value).toString()));
+                    type.writeLong(output, toTrinoTimestamp(((Utf8) value).toString()));
                 }
                 else if (type.equals(TIME_WITH_TIME_ZONE)) {
                     type.writeLong(output, DateTimeEncoding.packDateTimeWithZone(((Long) value).longValue() / 1000, TimeZoneKey.UTC_KEY));

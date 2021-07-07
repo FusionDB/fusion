@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.trino.execution.buffer.PagesSerdeUtil.writeSerializedPage;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spiller.FileSingleStreamSpillerFactory.SPILL_FILE_PREFIX;
@@ -69,7 +70,7 @@ public class FileSingleStreamSpiller
 
     private boolean writable = true;
     private long spilledPagesInMemorySize;
-    private ListenableFuture<?> spillInProgress = Futures.immediateFuture(null);
+    private ListenableFuture<Void> spillInProgress = immediateVoidFuture();
 
     private final Runnable fileSystemErrorHandler;
 
@@ -113,11 +114,11 @@ public class FileSingleStreamSpiller
     }
 
     @Override
-    public ListenableFuture<?> spill(Iterator<Page> pageIterator)
+    public ListenableFuture<Void> spill(Iterator<Page> pageIterator)
     {
         requireNonNull(pageIterator, "pageIterator is null");
         checkNoSpillInProgress();
-        spillInProgress = executor.submit(() -> writePages(pageIterator));
+        spillInProgress = Futures.submit(() -> writePages(pageIterator), executor);
         return spillInProgress;
     }
 
@@ -144,7 +145,7 @@ public class FileSingleStreamSpiller
     {
         checkState(writable, "Spilling no longer allowed. The spiller has been made non-writable on first read for subsequent reads to be consistent");
         try (SliceOutput output = new OutputStreamSliceOutput(targetFile.newOutputStream(APPEND), BUFFER_SIZE);
-             PagesSerde.PagesSerdeContext context = serde.newContext()) {
+                PagesSerde.PagesSerdeContext context = serde.newContext()) {
             while (pageIterator.hasNext()) {
                 Page page = pageIterator.next();
                 spilledPagesInMemorySize += page.getSizeInBytes();

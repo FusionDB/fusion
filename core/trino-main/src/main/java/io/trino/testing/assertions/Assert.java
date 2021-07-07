@@ -15,6 +15,9 @@ package io.trino.testing.assertions;
 
 import io.airlift.units.Duration;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+
 /**
  * This class provides replacements for TestNG's faulty assertion methods.
  * <p>
@@ -50,7 +53,17 @@ public class Assert
         }
     }
 
+    public static void assertEventually(Runnable assertion)
+    {
+        assertEventually(new Duration(30, SECONDS), assertion);
+    }
+
     public static void assertEventually(Duration timeout, Runnable assertion)
+    {
+        assertEventually(timeout, new Duration(50, MILLISECONDS), assertion);
+    }
+
+    public static void assertEventually(Duration timeout, Duration retryFrequency, Runnable assertion)
     {
         long start = System.nanoTime();
         while (!Thread.currentThread().isInterrupted()) {
@@ -64,7 +77,7 @@ public class Assert
                 }
             }
             try {
-                Thread.sleep(50);
+                Thread.sleep(retryFrequency.toMillis());
             }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

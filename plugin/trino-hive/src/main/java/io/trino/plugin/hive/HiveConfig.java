@@ -51,6 +51,8 @@ import static java.util.concurrent.TimeUnit.MINUTES;
         "hive.rcfile-optimized-writer.enabled",
         "hive.time-zone",
         "hive.assume-canonical-partition-keys",
+        "hive.partition-use-column-names",
+        "hive.allow-corrupt-writes-for-testing",
 })
 public class HiveConfig
 {
@@ -77,8 +79,6 @@ public class HiveConfig
     private int maxConcurrentMetastoreDrops = 20;
     private int maxConcurrentMetastoreUpdates = 20;
 
-    private boolean allowCorruptWritesForTesting;
-
     private long perTransactionMetastoreCacheMaximumSize = 1000;
 
     private HiveStorageFormat hiveStorageFormat = HiveStorageFormat.ORC;
@@ -91,13 +91,14 @@ public class HiveConfig
     private int maxOpenSortFiles = 50;
     private int writeValidationThreads = 16;
     private boolean validateBucketing = true;
+    private boolean parallelPartitionedBucketedWrites = true;
 
     private DataSize textMaxLineLength = DataSize.of(100, MEGABYTE);
 
     private String orcLegacyTimeZone = TimeZone.getDefault().getID();
 
     private String parquetTimeZone = TimeZone.getDefault().getID();
-    private boolean useParquetColumnNames;
+    private boolean useParquetColumnNames = true;
 
     private String rcfileTimeZone = TimeZone.getDefault().getID();
     private boolean rcfileWriterValidate;
@@ -107,6 +108,7 @@ public class HiveConfig
 
     private boolean bucketExecutionEnabled = true;
     private boolean sortedWritingEnabled = true;
+    private boolean propagateTableScanSortingProperties;
 
     private boolean optimizeMismatchedBucketCount;
     private boolean writesToNonManagedTablesEnabled;
@@ -133,7 +135,6 @@ public class HiveConfig
 
     private boolean allowRegisterPartition;
     private boolean queryPartitionFilterRequired;
-    private boolean partitionUseColumnNames;
 
     private boolean projectionPushdownEnabled = true;
 
@@ -371,21 +372,6 @@ public class HiveConfig
         return this;
     }
 
-    @Deprecated
-    public boolean getAllowCorruptWritesForTesting()
-    {
-        return allowCorruptWritesForTesting;
-    }
-
-    @Deprecated
-    @Config("hive.allow-corrupt-writes-for-testing")
-    @ConfigDescription("Allow Hive connector to write data even when data will likely be corrupt")
-    public HiveConfig setAllowCorruptWritesForTesting(boolean allowCorruptWritesForTesting)
-    {
-        this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
-        return this;
-    }
-
     @Min(1)
     public long getPerTransactionMetastoreCacheMaximumSize()
     {
@@ -561,6 +547,20 @@ public class HiveConfig
     public HiveConfig setValidateBucketing(boolean validateBucketing)
     {
         this.validateBucketing = validateBucketing;
+        return this;
+    }
+
+    public boolean isParallelPartitionedBucketedWrites()
+    {
+        return parallelPartitionedBucketedWrites;
+    }
+
+    @Config("hive.parallel-partitioned-bucketed-writes")
+    @LegacyConfig("hive.parallel-partitioned-bucketed-inserts")
+    @ConfigDescription("Improve parallelism of partitioned and bucketed table writes")
+    public HiveConfig setParallelPartitionedBucketedWrites(boolean parallelPartitionedBucketedWrites)
+    {
+        this.parallelPartitionedBucketedWrites = parallelPartitionedBucketedWrites;
         return this;
     }
 
@@ -777,6 +777,19 @@ public class HiveConfig
         return this;
     }
 
+    public boolean isPropagateTableScanSortingProperties()
+    {
+        return propagateTableScanSortingProperties;
+    }
+
+    @Config("hive.propagate-table-scan-sorting-properties")
+    @ConfigDescription("Use sorted table layout to generate more efficient execution plans. May lead to incorrect results if files are not sorted as per table definition.")
+    public HiveConfig setPropagateTableScanSortingProperties(boolean propagateTableScanSortingProperties)
+    {
+        this.propagateTableScanSortingProperties = propagateTableScanSortingProperties;
+        return this;
+    }
+
     @Config("hive.non-managed-table-writes-enabled")
     @ConfigDescription("Enable writes to non-managed (external) tables")
     public HiveConfig setWritesToNonManagedTablesEnabled(boolean writesToNonManagedTablesEnabled)
@@ -958,19 +971,6 @@ public class HiveConfig
     public HiveConfig setQueryPartitionFilterRequired(boolean queryPartitionFilterRequired)
     {
         this.queryPartitionFilterRequired = queryPartitionFilterRequired;
-        return this;
-    }
-
-    public boolean getPartitionUseColumnNames()
-    {
-        return partitionUseColumnNames;
-    }
-
-    @Config("hive.partition-use-column-names")
-    @ConfigDescription("Access partition columns by names")
-    public HiveConfig setPartitionUseColumnNames(boolean partitionUseColumnNames)
-    {
-        this.partitionUseColumnNames = partitionUseColumnNames;
         return this;
     }
 

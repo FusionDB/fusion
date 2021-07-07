@@ -22,10 +22,9 @@ import io.trino.spi.connector.ConnectorPartitionHandle;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.Objects.requireNonNull;
 
@@ -66,12 +65,6 @@ public class BufferingSplitSource
         return source.isFinished();
     }
 
-    @Override
-    public Optional<Integer> getMinScheduleSplitBatchSize()
-    {
-        return source.getMinScheduleSplitBatchSize();
-    }
-
     private static class GetNextBatch
     {
         private final SplitSource splitSource;
@@ -91,7 +84,7 @@ public class BufferingSplitSource
                 Lifespan lifespan)
         {
             GetNextBatch getNextBatch = new GetNextBatch(splitSource, min, max, partitionHandle, lifespan);
-            ListenableFuture<?> future = getNextBatch.fetchSplits();
+            ListenableFuture<Void> future = getNextBatch.fetchSplits();
             return Futures.transform(future, ignored -> new SplitBatch(getNextBatch.splits, getNextBatch.noMoreSplits), directExecutor());
         }
 
@@ -105,17 +98,17 @@ public class BufferingSplitSource
             this.lifespan = requireNonNull(lifespan, "lifespan is null");
         }
 
-        private ListenableFuture<?> fetchSplits()
+        private ListenableFuture<Void> fetchSplits()
         {
             if (splits.size() >= min) {
-                return immediateFuture(null);
+                return immediateVoidFuture();
             }
             ListenableFuture<SplitBatch> future = splitSource.getNextBatch(partitionHandle, lifespan, max - splits.size());
             return Futures.transformAsync(future, splitBatch -> {
                 splits.addAll(splitBatch.getSplits());
                 if (splitBatch.isLastBatch()) {
                     noMoreSplits = true;
-                    return immediateFuture(null);
+                    return immediateVoidFuture();
                 }
                 return fetchSplits();
             }, directExecutor());

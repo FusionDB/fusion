@@ -22,6 +22,7 @@ import io.trino.operator.scalar.AbstractTestFunctions;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.type.ArrayType;
+import io.trino.spi.type.RowType;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
@@ -770,6 +771,43 @@ public class TestGeoFunctions
     }
 
     @Test
+    public void testGeometryNearestPoints()
+    {
+        assertNearestPoints("POINT (50 100)", "POINT (150 150)", "POINT (50 100)", "POINT (150 150)");
+        assertNearestPoints("MULTIPOINT (50 100, 50 200)", "POINT (50 100)", "POINT (50 100)", "POINT (50 100)");
+        assertNearestPoints("LINESTRING (50 100, 50 200)", "LINESTRING (10 10, 20 20)", "POINT (50 100)", "POINT (20 20)");
+        assertNearestPoints("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", "LINESTRING (10 20, 20 50)", "POINT (4 4)", "POINT (10 20)");
+        assertNearestPoints("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))", "POLYGON ((4 4, 4 5, 5 5, 5 4, 4 4))", "POINT (3 3)", "POINT (4 4)");
+        assertNearestPoints("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))", "POLYGON ((10 100, 30 10, 30 100, 10 100))", "POINT (3 3)", "POINT (30 10)");
+        assertNearestPoints("GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 20, 20 0))", "POLYGON ((5 5, 5 6, 6 6, 6 5, 5 5))", "POINT (10 10)", "POINT (6 6)");
+
+        assertNoNearestPoints("POINT EMPTY", "POINT (150 150)");
+        assertNoNearestPoints("POINT (50 100)", "POINT EMPTY");
+        assertNoNearestPoints("POINT EMPTY", "POINT EMPTY");
+        assertNoNearestPoints("MULTIPOINT EMPTY", "POINT (50 100)");
+        assertNoNearestPoints("LINESTRING (50 100, 50 200)", "LINESTRING EMPTY");
+        assertNoNearestPoints("MULTILINESTRING EMPTY", "LINESTRING (10 20, 20 50)");
+        assertNoNearestPoints("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))", "POLYGON EMPTY");
+        assertNoNearestPoints("MULTIPOLYGON EMPTY", "POLYGON ((10 100, 30 10, 30 100, 10 100))");
+    }
+
+    private void assertNearestPoints(String leftInputWkt, String rightInputWkt, String leftPointWkt, String rightPointWkt)
+    {
+        assertFunction(
+                format("geometry_nearest_points(ST_GeometryFromText('%s'), ST_GeometryFromText('%s'))", leftInputWkt, rightInputWkt),
+                RowType.anonymous(ImmutableList.of(GEOMETRY, GEOMETRY)),
+                ImmutableList.of(leftPointWkt, rightPointWkt));
+    }
+
+    private void assertNoNearestPoints(String leftInputWkt, String rightInputWkt)
+    {
+        assertFunction(
+                format("geometry_nearest_points(ST_GeometryFromText('%s'), ST_GeometryFromText('%s'))", leftInputWkt, rightInputWkt),
+                RowType.anonymous(ImmutableList.of(GEOMETRY, GEOMETRY)),
+                null);
+    }
+
+    @Test
     public void testSTExteriorRing()
     {
         assertFunction("ST_AsText(ST_ExteriorRing(ST_GeometryFromText('POLYGON EMPTY')))", VARCHAR, null);
@@ -1406,5 +1444,94 @@ public class TestGeoFunctions
     private void assertGeometryFromHadoopShape(String hadoopHex, String expectedWkt)
     {
         assertFunction(format("ST_AsText(geometry_from_hadoop_shape(from_hex('%s')))", hadoopHex), VARCHAR, expectedWkt);
+    }
+
+    @Test
+    public void testGeometryJsonConversion()
+    {
+        // empty geometries should return empty
+        // empty geometries are represented by an empty JSON array in GeoJSON
+        assertGeoToAndFromJson("POINT EMPTY");
+        assertGeoToAndFromJson("LINESTRING EMPTY");
+        assertGeoToAndFromJson("POLYGON EMPTY");
+        assertGeoToAndFromJson("MULTIPOINT EMPTY");
+        assertGeoToAndFromJson("MULTILINESTRING EMPTY");
+        assertGeoToAndFromJson("MULTIPOLYGON EMPTY");
+        assertGeoToAndFromJson("GEOMETRYCOLLECTION EMPTY");
+
+        // valid nonempty geometries should return as is.
+        assertGeoToAndFromJson("POINT (1 2)");
+        assertGeoToAndFromJson("MULTIPOINT ((1 2), (3 4))");
+        assertGeoToAndFromJson("LINESTRING (0 0, 1 2, 3 4)");
+        assertGeoToAndFromJson("MULTILINESTRING (" +
+                "(1 1, 5 1), " +
+                "(2 4, 4 4))");
+        assertGeoToAndFromJson("POLYGON (" +
+                "(0 0, 1 0, 1 1, 0 1, 0 0))");
+        assertGeoToAndFromJson("POLYGON (" +
+                "(0 0, 3 0, 3 3, 0 3, 0 0), " +
+                "(1 1, 1 2, 2 2, 2 1, 1 1))");
+        assertGeoToAndFromJson("MULTIPOLYGON (" +
+                "((1 1, 3 1, 3 3, 1 3, 1 1)), " +
+                "((2 4, 6 4, 6 6, 2 6, 2 4)))");
+        assertGeoToAndFromJson("GEOMETRYCOLLECTION (" +
+                "POINT (1 2), " +
+                "LINESTRING (0 0, 1 2, 3 4), " +
+                "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)))");
+
+        // invalid geometries should return as is.
+        assertGeoToAndFromJson("MULTIPOINT ((0 0), (0 1), (1 1), (0 1))");
+        assertGeoToAndFromJson("LINESTRING (0 0, 0 1, 0 1, 1 1, 1 0, 0 0)");
+        assertGeoToAndFromJson("LINESTRING (0 0, 1 1, 1 0, 0 1)");
+
+        // extra properties are stripped from JSON
+        assertValidGeometryJson("{\"type\":\"Point\", \"coordinates\":[0,0], \"mykey\":\"myvalue\"}", "POINT (0 0)");
+
+        // explicit JSON test cases should valid but return empty
+        assertValidGeometryJson("{\"type\":\"Point\", \"coordinates\":[]}", "POINT EMPTY");
+        assertValidGeometryJson("{\"type\":\"LineString\", \"coordinates\":[]}", "LINESTRING EMPTY");
+        assertValidGeometryJson("{\"type\":\"Polygon\", \"coordinates\":[]}", "POLYGON EMPTY");
+        assertValidGeometryJson("{\"type\":\"MultiPoint\", \"coordinates\":[]}", "MULTIPOINT EMPTY");
+        assertValidGeometryJson("{\"type\":\"MultiPolygon\", \"coordinates\":[]}", "MULTIPOLYGON EMPTY");
+        assertValidGeometryJson(
+                "{\"type\":\"MultiLineString\", \"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+                "MULTILINESTRING ((0 0, 1 10), (10 10, 20 30), (123 123, 456 789))");
+
+        // Valid JSON with invalid Geometry definition
+        assertInvalidGeometryJson("{\"type\":\"Point\"}",
+                "Invalid GeoJSON: Could not parse Point from GeoJson string.");
+        assertInvalidGeometryJson("{\"type\":\"LineString\",\"coordinates\":null}",
+                "Invalid GeoJSON: Could not parse LineString from GeoJson string.");
+        assertInvalidGeometryJson("{ \"data\": {\"type\":\"Point\",\"coordinates\":[0,0]}}",
+                "Invalid GeoJSON: Could not parse Geometry from Json string.  No 'type' property found.");
+        assertInvalidGeometryJson("{\"type\":\"MultiPoint\",\"invalidField\":[[10,10],[20,30]]}",
+                "Invalid GeoJSON: Could not parse MultiPoint from GeoJson string.");
+        assertInvalidGeometryJson("{\"type\":\"Feature\",\"geometry\":[],\"property\":\"foo\"}",
+                "Invalid GeoJSON: Could not parse Geometry from GeoJson string.  Unsupported 'type':Feature");
+        assertInvalidGeometryJson("{\"type\":\"FeatureCollection\",\"features\":[]}",
+                "Invalid GeoJSON: Could not parse Geometry from GeoJson string.  Unsupported 'type':FeatureCollection");
+        assertInvalidGeometryJson("{\"type\":\"MultiPoint\",\"missingCoordinates\":[]}",
+                "Invalid GeoJSON: Could not parse MultiPoint from GeoJson string.");
+        assertInvalidGeometryJson("{\"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+                "Invalid GeoJSON: Could not parse Geometry from Json string.  No 'type' property found.");
+
+        // Invalid JSON
+        assertInvalidGeometryJson("{\"type\":\"MultiPoint\",\"crashMe\"}",
+                "Invalid GeoJSON: Unexpected token RIGHT BRACE(}) at position 30.");
+    }
+
+    private void assertGeoToAndFromJson(String wkt)
+    {
+        assertFunction(format("ST_AsText(to_geometry(from_geojson_geometry(to_geojson_geometry(to_spherical_geography(ST_GeometryFromText('%s'))))))", wkt), VARCHAR, wkt);
+    }
+
+    private void assertValidGeometryJson(String json, String wkt)
+    {
+        assertFunction("ST_AsText(to_geometry(from_geojson_geometry('" + json + "')))", VARCHAR, wkt);
+    }
+
+    private void assertInvalidGeometryJson(String json, String message)
+    {
+        assertInvalidFunction("from_geojson_geometry('" + json + "')", message);
     }
 }

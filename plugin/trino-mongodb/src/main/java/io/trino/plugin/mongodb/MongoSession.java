@@ -188,7 +188,10 @@ public class MongoSession
 
     public void addColumn(SchemaTableName schemaTableName, ColumnMetadata columnMetadata)
     {
-        Document metadata = getTableMetadata(schemaTableName);
+        String schemaName = toRemoteSchemaName(schemaTableName.getSchemaName());
+        String tableName = toRemoteTableName(schemaName, schemaTableName.getTableName());
+
+        Document metadata = getTableMetadata(schemaName, tableName);
 
         List<Document> columns = new ArrayList<>(getColumnMetadata(metadata));
 
@@ -197,9 +200,6 @@ public class MongoSession
         newColumn.append(FIELDS_TYPE_KEY, columnMetadata.getType().getTypeSignature().toString());
         newColumn.append(FIELDS_HIDDEN_KEY, false);
         columns.add(newColumn);
-
-        String schemaName = toRemoteSchemaName(schemaTableName.getSchemaName());
-        String tableName = toRemoteTableName(schemaName, schemaTableName.getTableName());
 
         metadata.append(FIELDS_KEY, columns);
 
@@ -210,10 +210,33 @@ public class MongoSession
         tableCache.invalidate(schemaTableName);
     }
 
-    private MongoTable loadTableSchema(SchemaTableName tableName)
+    public void dropColumn(SchemaTableName schemaTableName, String columnName)
+    {
+        String remoteSchemaName = toRemoteSchemaName(schemaTableName.getSchemaName());
+        String remoteTableName = toRemoteTableName(remoteSchemaName, schemaTableName.getTableName());
+
+        Document metadata = getTableMetadata(remoteSchemaName, remoteTableName);
+
+        List<Document> columns = getColumnMetadata(metadata).stream()
+                .filter(document -> !document.getString(FIELDS_NAME_KEY).equals(columnName))
+                .collect(toImmutableList());
+
+        metadata.append(FIELDS_KEY, columns);
+
+        MongoDatabase database = client.getDatabase(remoteSchemaName);
+        MongoCollection<Document> schema = database.getCollection(schemaCollection);
+        schema.findOneAndReplace(new Document(TABLE_NAME_KEY, remoteTableName), metadata);
+
+        tableCache.invalidate(schemaTableName);
+    }
+
+    private MongoTable loadTableSchema(SchemaTableName schemaTableName)
             throws TableNotFoundException
     {
-        Document tableMeta = getTableMetadata(tableName);
+        String schemaName = toRemoteSchemaName(schemaTableName.getSchemaName());
+        String tableName = toRemoteTableName(schemaName, schemaTableName.getTableName());
+
+        Document tableMeta = getTableMetadata(schemaName, tableName);
 
         ImmutableList.Builder<MongoColumnHandle> columnHandles = ImmutableList.builder();
 
@@ -222,8 +245,8 @@ public class MongoSession
             columnHandles.add(columnHandle);
         }
 
-        MongoTableHandle tableHandle = new MongoTableHandle(tableName);
-        return new MongoTable(tableHandle, columnHandles.build(), getIndexes(tableName));
+        MongoTableHandle tableHandle = new MongoTableHandle(schemaTableName);
+        return new MongoTable(tableHandle, columnHandles.build(), getIndexes(schemaName, tableName));
     }
 
     private MongoColumnHandle buildColumnHandle(Document columnMeta)
@@ -258,12 +281,13 @@ public class MongoSession
         return client.getDatabase(schemaName).getCollection(tableName);
     }
 
-    public List<MongoIndex> getIndexes(SchemaTableName tableName)
+    public List<MongoIndex> getIndexes(String schemaName, String tableName)
     {
-        if (isView(tableName)) {
+        if (isView(schemaName, tableName)) {
             return ImmutableList.of();
         }
-        return MongoIndex.parse(getCollection(tableName).listIndexes());
+        MongoCollection<Document> collection = client.getDatabase(schemaName).getCollection(tableName);
+        return MongoIndex.parse(collection.listIndexes());
     }
 
     public MongoCursor<Document> execute(MongoTableHandle tableHandle, List<MongoColumnHandle> columns)
@@ -323,41 +347,19 @@ public class MongoSession
             }
             else {
                 Document rangeConjuncts = new Document();
-                if (!range.getLow().isLowerUnbounded()) {
-                    Optional<Object> translated = translateValue(range.getLow().getValue(), type);
+                if (!range.isLowUnbounded()) {
+                    Optional<Object> translated = translateValue(range.getLowBoundedValue(), type);
                     if (translated.isEmpty()) {
                         return Optional.empty();
                     }
-                    switch (range.getLow().getBound()) {
-                        case ABOVE:
-                            rangeConjuncts.put(GT_OP, translated.get());
-                            break;
-                        case EXACTLY:
-                            rangeConjuncts.put(GTE_OP, translated.get());
-                            break;
-                        case BELOW:
-                            throw new IllegalArgumentException("Low Marker should never use BELOW bound: " + range);
-                        default:
-                            throw new AssertionError("Unhandled bound: " + range.getLow().getBound());
-                    }
+                    rangeConjuncts.put(range.isLowInclusive() ? GTE_OP : GT_OP, translated.get());
                 }
-                if (!range.getHigh().isUpperUnbounded()) {
-                    Optional<Object> translated = translateValue(range.getHigh().getValue(), type);
+                if (!range.isHighUnbounded()) {
+                    Optional<Object> translated = translateValue(range.getHighBoundedValue(), type);
                     if (translated.isEmpty()) {
                         return Optional.empty();
                     }
-                    switch (range.getHigh().getBound()) {
-                        case ABOVE:
-                            throw new IllegalArgumentException("High Marker should never use ABOVE bound: " + range);
-                        case EXACTLY:
-                            rangeConjuncts.put(LTE_OP, translated.get());
-                            break;
-                        case BELOW:
-                            rangeConjuncts.put(LT_OP, translated.get());
-                            break;
-                        default:
-                            throw new AssertionError("Unhandled bound: " + range.getHigh().getBound());
-                    }
+                    rangeConjuncts.put(range.isHighInclusive() ? LTE_OP : LT_OP, translated.get());
                 }
                 // If rangeConjuncts is null, then the range was ALL, which should already have been checked for
                 verify(!rangeConjuncts.isEmpty());
@@ -440,12 +442,9 @@ public class MongoSession
     }
 
     // Internal Schema management
-    private Document getTableMetadata(SchemaTableName schemaTableName)
+    private Document getTableMetadata(String schemaName, String tableName)
             throws TableNotFoundException
     {
-        String schemaName = toRemoteSchemaName(schemaTableName.getSchemaName());
-        String tableName = toRemoteTableName(schemaName, schemaTableName.getTableName());
-
         MongoDatabase db = client.getDatabase(schemaName);
         MongoCollection<Document> schema = db.getCollection(schemaCollection);
 
@@ -454,13 +453,15 @@ public class MongoSession
 
         if (doc == null) {
             if (!collectionExists(db, tableName)) {
-                throw new TableNotFoundException(schemaTableName);
+                throw new TableNotFoundException(new SchemaTableName(schemaName, tableName), format("Table '%s.%s' not found", schemaName, tableName), null);
             }
             else {
                 Document metadata = new Document(TABLE_NAME_KEY, tableName);
                 metadata.append(FIELDS_KEY, guessTableFields(schemaName, tableName));
+                if (!indexExists(schema)) {
+                    schema.createIndex(new Document(TABLE_NAME_KEY, 1), new IndexOptions().unique(true));
+                }
 
-                schema.createIndex(new Document(TABLE_NAME_KEY, 1), new IndexOptions().unique(true));
                 schema.insertOne(metadata);
 
                 return metadata;
@@ -478,6 +479,12 @@ public class MongoSession
             }
         }
         return false;
+    }
+
+    private boolean indexExists(MongoCollection<Document> schemaCollection)
+    {
+        return MongoIndex.parse(schemaCollection.listIndexes()).stream()
+                .anyMatch(index -> index.getKeys().size() == 1 && TABLE_NAME_KEY.equals(index.getKeys().get(0).getName()));
     }
 
     private Set<String> getTableMetadataNames(String schemaName)
@@ -516,7 +523,10 @@ public class MongoSession
         metadata.append(FIELDS_KEY, fields);
 
         MongoCollection<Document> schema = db.getCollection(schemaCollection);
-        schema.createIndex(new Document(TABLE_NAME_KEY, 1), new IndexOptions().unique(true));
+        if (!indexExists(schema)) {
+            schema.createIndex(new Document(TABLE_NAME_KEY, 1), new IndexOptions().unique(true));
+        }
+
         schema.insertOne(metadata);
     }
 
@@ -662,14 +672,14 @@ public class MongoSession
         return tableName;
     }
 
-    private boolean isView(SchemaTableName tableName)
+    private boolean isView(String schemaName, String tableName)
     {
         Document listCollectionsCommand = new Document(new ImmutableMap.Builder<String, Object>()
                 .put("listCollections", 1.0)
-                .put("filter", documentOf("name", tableName.getTableName()))
+                .put("filter", documentOf("name", tableName))
                 .put("nameOnly", true)
                 .build());
-        Document cursor = client.getDatabase(tableName.getSchemaName()).runCommand(listCollectionsCommand).get("cursor", Document.class);
+        Document cursor = client.getDatabase(schemaName).runCommand(listCollectionsCommand).get("cursor", Document.class);
         List<Document> firstBatch = cursor.get("firstBatch", List.class);
         if (firstBatch.isEmpty()) {
             return false;

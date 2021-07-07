@@ -27,6 +27,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static io.trino.spi.type.StandardTypes.ARRAY;
 import static io.trino.spi.type.StandardTypes.MAP;
 import static io.trino.spi.type.StandardTypes.ROW;
+import static org.apache.iceberg.avro.AvroSchemaUtil.makeCompatibleName;
 
 public class PrimitiveTypeMapBuilder
 {
@@ -42,7 +43,7 @@ public class PrimitiveTypeMapBuilder
     private Map<List<String>, Type> buildTypeMap(List<Type> types, List<String> columnNames)
     {
         for (int i = 0; i < types.size(); i++) {
-            visitType(types.get(i), columnNames.get(i), ImmutableList.of());
+            visitType(types.get(i), makeCompatibleName(columnNames.get(i)), ImmutableList.of());
         }
         return builder.build();
     }
@@ -71,7 +72,7 @@ public class PrimitiveTypeMapBuilder
 
     private void visitMapType(MapType type, String name, List<String> parent)
     {
-        parent = ImmutableList.<String>builder().addAll(parent).add(name).add("map").build();
+        parent = ImmutableList.<String>builder().addAll(parent).add(name).add("key_value").build();
         visitType(type.getKeyType(), "key", parent);
         visitType(type.getValueType(), "value", parent);
     }

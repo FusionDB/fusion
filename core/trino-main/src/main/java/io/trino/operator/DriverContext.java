@@ -88,7 +88,7 @@ public class DriverContext
     {
         this.pipelineContext = requireNonNull(pipelineContext, "pipelineContext is null");
         this.notificationExecutor = requireNonNull(notificationExecutor, "notificationExecutor is null");
-        this.yieldExecutor = requireNonNull(yieldExecutor, "scheduler is null");
+        this.yieldExecutor = requireNonNull(yieldExecutor, "yieldExecutor is null");
         this.driverMemoryContext = requireNonNull(driverMemoryContext, "driverMemoryContext is null");
         this.lifespan = requireNonNull(lifespan, "lifespan is null");
         this.yieldSignal = new DriverYieldSignal();
@@ -146,7 +146,7 @@ public class DriverContext
         operationTimer.end(overallTiming);
     }
 
-    public void recordBlocked(ListenableFuture<?> blocked)
+    public void recordBlocked(ListenableFuture<Void> blocked)
     {
         requireNonNull(blocked, "blocked is null");
 
@@ -183,7 +183,7 @@ public class DriverContext
         return finished.get() || pipelineContext.isDone();
     }
 
-    public ListenableFuture<?> reserveSpill(long bytes)
+    public ListenableFuture<Void> reserveSpill(long bytes)
     {
         return pipelineContext.reserveSpill(bytes);
     }

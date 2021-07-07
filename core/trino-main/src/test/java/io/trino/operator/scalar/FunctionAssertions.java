@@ -307,19 +307,6 @@ public final class FunctionAssertions
         return Iterables.getOnlyElement(resultSet);
     }
 
-    // this is not safe as it catches all RuntimeExceptions
-    @Deprecated
-    public void assertInvalidFunction(String projection)
-    {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to fail");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
-    }
-
     public void assertInvalidFunction(String projection, ErrorCodeSupplier errorCode, String message)
     {
         assertTrinoExceptionThrownBy(() -> evaluateInvalid(projection))
@@ -389,7 +376,7 @@ public final class FunctionAssertions
                     newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
                     SOURCE_PAGE);
             // consume the iterator
-            Iterators.getOnlyElement(output);
+            Optional<Page> ignored = Iterators.getOnlyElement(output);
 
             long retainedSize = processor.getProjections().stream()
                     .mapToLong(this::getRetainedSizeOfCachedInstance)
@@ -707,7 +694,7 @@ public final class FunctionAssertions
     private Object interpret(Expression expression, Type expectedType, Session session)
     {
         Map<NodeRef<Expression>, Type> expressionTypes = getTypes(session, metadata, INPUT_TYPES, expression);
-        ExpressionInterpreter evaluator = ExpressionInterpreter.expressionInterpreter(expression, metadata, session, expressionTypes);
+        ExpressionInterpreter evaluator = new ExpressionInterpreter(expression, metadata, session, expressionTypes);
 
         Object result = evaluator.evaluate(symbol -> {
             int position = 0;

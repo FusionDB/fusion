@@ -82,12 +82,13 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.airlift.http.client.FullJsonResponseHandler.createFullJsonResponseHandler;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.Request.Builder.preparePost;
 import static io.airlift.http.client.StaticBodyGenerator.createStaticBodyGenerator;
+import static io.trino.SystemSessionProperties.getMaxUnacknowledgedSplitsPerTask;
 import static io.trino.execution.TaskInfo.createInitialTask;
 import static io.trino.execution.TaskState.ABORTED;
 import static io.trino.execution.TaskState.FAILED;
@@ -125,6 +126,7 @@ public final class HttpRemoteTask
 
     @GuardedBy("this")
     private final SetMultimap<PlanNodeId, ScheduledSplit> pendingSplits = HashMultimap.create();
+    private final int maxUnacknowledgedSplits;
     @GuardedBy("this")
     private volatile int pendingSourceSplitCount;
     @GuardedBy("this")
@@ -135,7 +137,7 @@ public final class HttpRemoteTask
     private final Map<PlanNodeId, Boolean> noMoreSplits = new HashMap<>();
     @GuardedBy("this")
     private final AtomicReference<OutputBuffers> outputBuffers = new AtomicReference<>();
-    private final FutureStateChange<?> whenSplitQueueHasSpace = new FutureStateChange<>();
+    private final FutureStateChange<Void> whenSplitQueueHasSpace = new FutureStateChange<>();
     @GuardedBy("this")
     private boolean splitQueueHasSpace = true;
     @GuardedBy("this")
@@ -157,6 +159,7 @@ public final class HttpRemoteTask
 
     private final PartitionedSplitCountTracker partitionedSplitCountTracker;
 
+    private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean aborting = new AtomicBoolean(false);
 
     public HttpRemoteTask(
@@ -224,6 +227,7 @@ public final class HttpRemoteTask
                     .filter(initialSplits::containsKey)
                     .mapToInt(partitionedSource -> initialSplits.get(partitionedSource).size())
                     .sum();
+            maxUnacknowledgedSplits = getMaxUnacknowledgedSplitsPerTask(session);
 
             List<BufferInfo> bufferStates = outputBuffers.getBuffers()
                     .keySet().stream()
@@ -315,6 +319,7 @@ public final class HttpRemoteTask
     {
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
             // to start we just need to trigger an update
+            started.set(true);
             scheduleUpdate();
 
             dynamicFiltersFetcher.start();
@@ -414,6 +419,12 @@ public final class HttpRemoteTask
         return getPendingSourceSplitCount() + taskStatus.getQueuedPartitionedDrivers();
     }
 
+    @Override
+    public int getUnacknowledgedPartitionedSplitCount()
+    {
+        return getPendingSourceSplitCount();
+    }
+
     @SuppressWarnings("FieldAccessNotGuarded")
     private int getPendingSourceSplitCount()
     {
@@ -435,7 +446,7 @@ public final class HttpRemoteTask
     }
 
     @Override
-    public synchronized ListenableFuture<?> whenSplitQueueHasSpace(int threshold)
+    public synchronized ListenableFuture<Void> whenSplitQueueHasSpace(int threshold)
     {
         if (whenSplitQueueHasSpaceThreshold.isPresent()) {
             checkArgument(threshold == whenSplitQueueHasSpaceThreshold.getAsInt(), "Multiple split queue space notification thresholds not supported");
@@ -445,18 +456,18 @@ public final class HttpRemoteTask
             updateSplitQueueSpace();
         }
         if (splitQueueHasSpace) {
-            return immediateFuture(null);
+            return immediateVoidFuture();
         }
         return whenSplitQueueHasSpace.createNewListener();
     }
 
     private synchronized void updateSplitQueueSpace()
     {
-        if (whenSplitQueueHasSpaceThreshold.isEmpty()) {
-            return;
-        }
-        splitQueueHasSpace = getQueuedPartitionedSplitCount() < whenSplitQueueHasSpaceThreshold.getAsInt();
-        if (splitQueueHasSpace) {
+        // Must check whether the unacknowledged split count threshold is reached even without listeners registered yet
+        splitQueueHasSpace = getUnacknowledgedPartitionedSplitCount() < maxUnacknowledgedSplits &&
+                (whenSplitQueueHasSpaceThreshold.isEmpty() || getQueuedPartitionedSplitCount() < whenSplitQueueHasSpaceThreshold.getAsInt());
+        // Only trigger notifications if a listener might be registered
+        if (splitQueueHasSpace && whenSplitQueueHasSpaceThreshold.isPresent()) {
             whenSplitQueueHasSpace.complete(null, executor);
         }
     }
@@ -484,9 +495,9 @@ public final class HttpRemoteTask
                 pendingSourceSplitCount -= removed;
             }
         }
-        updateSplitQueueSpace();
-
+        // Update node level split tracker before split queue space to ensure it's up to date before waking up the scheduler
         partitionedSplitCountTracker.setPartitionedSplitCount(getPartitionedSplitCount());
+        updateSplitQueueSpace();
     }
 
     private void updateTaskInfo(TaskInfo taskInfo)
@@ -504,17 +515,18 @@ public final class HttpRemoteTask
     {
         TaskStatus taskStatus = getTaskStatus();
         // don't update if the task hasn't been started yet or if it is already finished
-        if (!needsUpdate.get() || taskStatus.getState().isDone()) {
+        if (!started.get() || !needsUpdate.get() || taskStatus.getState().isDone()) {
             return;
         }
 
         // if there is a request already running, wait for it to complete
-        if (this.currentRequest != null && !this.currentRequest.isDone()) {
+        // currentRequest is always cleared when request is complete
+        if (currentRequest != null) {
             return;
         }
 
         // if throttled due to error, asynchronously wait for timeout and try again
-        ListenableFuture<?> errorRateLimit = updateErrorTracker.acquireRequestPermit();
+        ListenableFuture<Void> errorRateLimit = updateErrorTracker.acquireRequestPermit();
         if (!errorRateLimit.isDone()) {
             errorRateLimit.addListener(this::sendUpdate, executor);
             return;

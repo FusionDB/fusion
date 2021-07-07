@@ -62,7 +62,7 @@ public class LocalMergeSourceOperator
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
-            this.localExchangeFactory = requireNonNull(localExchangeFactory, "exchange is null");
+            this.localExchangeFactory = requireNonNull(localExchangeFactory, "localExchangeFactory is null");
             this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
             this.orderingCompiler = requireNonNull(orderingCompiler, "orderingCompiler is null");
             this.sortChannels = ImmutableList.copyOf(requireNonNull(sortChannels, "sortChannels is null"));
@@ -136,7 +136,7 @@ public class LocalMergeSourceOperator
     }
 
     @Override
-    public ListenableFuture<?> isBlocked()
+    public ListenableFuture<Void> isBlocked()
     {
         if (mergedPages.isBlocked()) {
             return mergedPages.getBlockedFuture();

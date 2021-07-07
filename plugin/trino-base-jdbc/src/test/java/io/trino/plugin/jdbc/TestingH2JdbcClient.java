@@ -16,15 +16,19 @@ package io.trino.plugin.jdbc;
 import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.jdbc.expression.AggregateFunctionRewriter;
 import io.trino.plugin.jdbc.expression.ImplementCountAll;
+import io.trino.plugin.jdbc.mapping.DefaultIdentifierMapping;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 
 import java.sql.Connection;
 import java.sql.Types;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -68,13 +72,14 @@ class TestingH2JdbcClient
 
     public TestingH2JdbcClient(BaseJdbcConfig config, ConnectionFactory connectionFactory)
     {
-        super(config, "\"", connectionFactory);
+        super(config, "\"", connectionFactory, new DefaultIdentifierMapping());
     }
 
     @Override
-    public boolean supportsGroupingSets()
+    public boolean supportsAggregationPushdown(ConnectorSession session, JdbcTableHandle table, List<List<ColumnHandle>> groupingSets)
     {
-        return false;
+        // GROUP BY with GROUPING SETS is not supported
+        return groupingSets.size() == 1;
     }
 
     @Override
@@ -115,10 +120,10 @@ class TestingH2JdbcClient
                 return Optional.of(doubleColumnMapping());
 
             case Types.CHAR:
-                return Optional.of(defaultCharColumnMapping(typeHandle.getRequiredColumnSize()));
+                return Optional.of(defaultCharColumnMapping(typeHandle.getRequiredColumnSize(), true));
 
             case Types.VARCHAR:
-                return Optional.of(defaultVarcharColumnMapping(typeHandle.getRequiredColumnSize()));
+                return Optional.of(defaultVarcharColumnMapping(typeHandle.getRequiredColumnSize(), true));
 
             case Types.DATE:
                 return Optional.of(dateColumnMapping());
@@ -127,7 +132,10 @@ class TestingH2JdbcClient
                 return Optional.of(timeColumnMapping(TIME_MILLIS));
 
             case Types.TIMESTAMP:
-                return Optional.of(timestampColumnMapping(TIMESTAMP_MILLIS));
+                TimestampType timestampType = typeHandle.getDecimalDigits()
+                        .map(TimestampType::createTimestampType)
+                        .orElse(TIMESTAMP_MILLIS);
+                return Optional.of(timestampColumnMapping(timestampType));
         }
 
         if (getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
@@ -170,5 +178,14 @@ class TestingH2JdbcClient
         }
 
         throw new TrinoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
+    }
+
+    @Override
+    protected void renameTable(ConnectorSession session, String catalogName, String schemaName, String tableName, SchemaTableName newTable)
+    {
+        if (!schemaName.equalsIgnoreCase(newTable.getSchemaName())) {
+            throw new TrinoException(NOT_SUPPORTED, "This connector does not support renaming tables across schemas");
+        }
+        super.renameTable(session, catalogName, schemaName, tableName, newTable);
     }
 }

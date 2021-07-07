@@ -519,7 +519,7 @@ public class ThriftHiveMetastoreClient
     }
 
     @Override
-    public String get_config_value(String name, String defaultValue)
+    public String getConfigValue(String name, String defaultValue)
             throws TException
     {
         return client.get_config_value(name, defaultValue);
@@ -566,7 +566,7 @@ public class ThriftHiveMetastoreClient
             throws TException
     {
         AddDynamicPartitions request = new AddDynamicPartitions(transactionId, writeId, dbName, tableName, partitionNames);
-        request.setOperationType(operation.getMetastoreOperationType());
+        request.setOperationType(operation.getMetastoreOperationType().get());
         client.add_dynamic_partitions(request);
     }
 

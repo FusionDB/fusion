@@ -16,6 +16,7 @@ package io.trino.plugin.pinot;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.io.ByteStreams;
+import com.google.common.io.Closer;
 import com.google.common.net.HostAndPort;
 import com.google.common.net.HttpHeaders;
 import io.airlift.http.client.HttpClient;
@@ -28,6 +29,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.List;
@@ -46,7 +48,7 @@ import static org.testcontainers.utility.DockerImageName.parse;
 public class TestingPinotCluster
         implements Closeable
 {
-    private static final String BASE_IMAGE = "apachepinot/pinot:0.5.0";
+    private static final String BASE_IMAGE = "apachepinot/pinot:0.6.0";
     private static final String ZOOKEEPER_INTERNAL_HOST = "zookeeper";
     private static final JsonCodec<List<String>> LIST_JSON_CODEC = listJsonCodec(String.class);
     private static final JsonCodec<PinotSuccessResponse> PINOT_SUCCESS_RESPONSE_JSON_CODEC = jsonCodec(PinotSuccessResponse.class);
@@ -61,39 +63,44 @@ public class TestingPinotCluster
     private final GenericContainer<?> server;
     private final GenericContainer<?> zookeeper;
     private final HttpClient httpClient;
+    private final Closer closer = Closer.create();
 
-    public TestingPinotCluster()
+    public TestingPinotCluster(Network network)
     {
-        httpClient = new JettyHttpClient();
+        httpClient = closer.register(new JettyHttpClient());
         zookeeper = new GenericContainer<>(parse("zookeeper:3.5.6"))
-                .withNetwork(Network.SHARED)
+                .withNetwork(network)
                 .withNetworkAliases(ZOOKEEPER_INTERNAL_HOST)
                 .withEnv("ZOOKEEPER_CLIENT_PORT", String.valueOf(ZOOKEEPER_PORT))
                 .withExposedPorts(ZOOKEEPER_PORT);
+        closer.register(zookeeper::stop);
 
         controller = new GenericContainer<>(parse(BASE_IMAGE))
-                .withNetwork(Network.SHARED)
+                .withNetwork(network)
                 .withClasspathResourceMapping("/pinot-controller", "/var/pinot/controller/config", BindMode.READ_ONLY)
                 .withEnv("JAVA_OPTS", "-Xmx512m -Dlog4j2.configurationFile=/opt/pinot/conf/pinot-controller-log4j2.xml -Dplugins.dir=/opt/pinot/plugins")
                 .withCommand("StartController", "-configFileName", "/var/pinot/controller/config/pinot-controller.conf")
                 .withNetworkAliases("pinot-controller", "localhost")
                 .withExposedPorts(CONTROLLER_PORT);
+        closer.register(controller::stop);
 
         broker = new GenericContainer<>(parse(BASE_IMAGE))
-                .withNetwork(Network.SHARED)
+                .withNetwork(network)
                 .withClasspathResourceMapping("/pinot-broker", "/var/pinot/broker/config", BindMode.READ_ONLY)
                 .withEnv("JAVA_OPTS", "-Xmx512m -Dlog4j2.configurationFile=/opt/pinot/conf/pinot-broker-log4j2.xml -Dplugins.dir=/opt/pinot/plugins")
                 .withCommand("StartBroker", "-clusterName", "pinot", "-zkAddress", getZookeeperInternalHostPort(), "-configFileName", "/var/pinot/broker/config/pinot-broker.conf")
                 .withNetworkAliases("pinot-broker", "localhost")
                 .withExposedPorts(BROKER_PORT);
+        closer.register(broker::stop);
 
         server = new GenericContainer<>(parse(BASE_IMAGE))
-                .withNetwork(Network.SHARED)
+                .withNetwork(network)
                 .withClasspathResourceMapping("/pinot-server", "/var/pinot/server/config", BindMode.READ_ONLY)
                 .withEnv("JAVA_OPTS", "-Xmx512m -Dlog4j2.configurationFile=/opt/pinot/conf/pinot-server-log4j2.xml -Dplugins.dir=/opt/pinot/plugins")
                 .withCommand("StartServer", "-clusterName", "pinot", "-zkAddress", getZookeeperInternalHostPort(), "-configFileName", "/var/pinot/server/config/pinot-server.conf")
                 .withNetworkAliases("pinot-server", "localhost")
                 .withExposedPorts(SERVER_PORT, SERVER_ADMIN_PORT);
+        closer.register(server::stop);
     }
 
     public void start()
@@ -106,12 +113,9 @@ public class TestingPinotCluster
 
     @Override
     public void close()
+            throws IOException
     {
-        server.stop();
-        broker.stop();
-        controller.stop();
-        zookeeper.stop();
-        httpClient.close();
+        closer.close();
     }
 
     private static String getZookeeperInternalHostPort()

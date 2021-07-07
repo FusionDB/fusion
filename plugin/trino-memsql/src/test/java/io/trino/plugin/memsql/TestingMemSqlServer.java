@@ -30,7 +30,8 @@ public class TestingMemSqlServer
 {
     private static final String MEM_SQL_LICENSE = requireNonNull(System.getProperty("memsql.license"), "memsql.license is not set");
 
-    public static final String DEFAULT_TAG = "memsql/cluster-in-a-box:centos-7.1.4-516dfe4088-1.9.6-1.6.1";
+    public static final String DEFAULT_TAG = "memsql/cluster-in-a-box:centos-7.1.13-11ddea2a3a-3.0.0-1.9.0";
+    public static final String LATEST_TESTED_TAG = "memsql/cluster-in-a-box:centos-7.3.4-d596a2867a-3.2.4-1.10.1";
 
     public static final Integer MEMSQL_PORT = 3306;
 
@@ -42,6 +43,14 @@ public class TestingMemSqlServer
     public TestingMemSqlServer(String dockerImageName)
     {
         super(DockerImageName.parse(dockerImageName));
+        addEnv("ROOT_PASSWORD", "memsql_root_password");
+        withCommand("sh", "-xeuc",
+                "/startup && " +
+                // Lower the size of pre-allocated log files to 1MB (minimum allowed) to reduce disk footprint
+                "memsql-admin update-config --yes --all --set-global --key \"log_file_size_partitions\" --value \"1048576\" && " +
+                "memsql-admin update-config --yes --all --set-global --key \"log_file_size_ref_dbs\" --value \"1048576\" && " +
+                // re-execute startup to actually start the nodes (first run performs setup but doesn't start the nodes)
+                "exec /startup");
         start();
     }
 
@@ -56,7 +65,6 @@ public class TestingMemSqlServer
     {
         addExposedPort(MEMSQL_PORT);
         addEnv("LICENSE_KEY", MEM_SQL_LICENSE);
-        addEnv("START_AFTER_INIT", "true");
         setStartupAttempts(3);
     }
 
@@ -75,7 +83,7 @@ public class TestingMemSqlServer
     @Override
     public String getPassword()
     {
-        return "";
+        return "memsql_root_password";
     }
 
     @Override

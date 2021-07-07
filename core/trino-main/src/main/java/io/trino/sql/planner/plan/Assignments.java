@@ -15,7 +15,6 @@ package io.trino.sql.planner.plan;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
@@ -37,6 +36,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collector;
 
 import static com.google.common.base.Preconditions.checkState;
@@ -133,7 +133,7 @@ public class Assignments
     public Assignments filter(Predicate<Symbol> predicate)
     {
         return assignments.entrySet().stream()
-                .filter(entry -> predicate.apply(entry.getKey()))
+                .filter(entry -> predicate.test(entry.getKey()))
                 .collect(toAssignments());
     }
 
@@ -224,6 +224,28 @@ public class Assignments
         return assignments.hashCode();
     }
 
+    public static class Assignment
+    {
+        private final Symbol output;
+        private final Expression expression;
+
+        public Assignment(Symbol output, Expression expression)
+        {
+            this.output = requireNonNull(output, "output is null");
+            this.expression = requireNonNull(expression, "expression is null");
+        }
+
+        public Symbol getOutput()
+        {
+            return output;
+        }
+
+        public Expression getExpression()
+        {
+            return expression;
+        }
+    }
+
     public static class Builder
     {
         private final Map<Symbol, Expression> assignments = new LinkedHashMap<>();
@@ -279,6 +301,12 @@ public class Assignments
         public Assignments build()
         {
             return new Assignments(assignments);
+        }
+
+        public Builder add(Assignment assignment)
+        {
+            put(assignment.getOutput(), assignment.getExpression());
+            return this;
         }
     }
 }

@@ -56,13 +56,19 @@
         </artifact>
     </artifactSet>
 
+    <artifactSet to="plugin/clickhouse">
+        <artifact id="${project.groupId}:trino-clickhouse:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
     <artifactSet to="plugin/example-http">
         <artifact id="${project.groupId}:trino-example-http:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/hive-hadoop2">
+    <artifactSet to="plugin/hive">
         <artifact id="${project.groupId}:trino-hive-hadoop2:zip:${project.version}">
             <unpack />
         </artifact>
@@ -136,6 +142,12 @@
 
     <artifactSet to="plugin/phoenix">
         <artifact id="${project.groupId}:trino-phoenix:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
+    <artifactSet to="plugin/phoenix5">
+        <artifact id="${project.groupId}:trino-phoenix5:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>

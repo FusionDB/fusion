@@ -41,12 +41,14 @@ import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import io.trino.geospatial.GeometryType;
 import io.trino.geospatial.KdbTree;
 import io.trino.geospatial.Rectangle;
 import io.trino.geospatial.serde.GeometrySerde;
 import io.trino.geospatial.serde.GeometrySerializationType;
 import io.trino.geospatial.serde.JtsGeometrySerde;
+import io.trino.spi.PageBuilder;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
@@ -55,12 +57,14 @@ import io.trino.spi.function.ScalarFunction;
 import io.trino.spi.function.SqlNullable;
 import io.trino.spi.function.SqlType;
 import io.trino.spi.type.IntegerType;
+import io.trino.spi.type.RowType;
 import io.trino.spi.type.StandardTypes;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryCollection;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.linearref.LengthIndexedLine;
+import org.locationtech.jts.operation.distance.DistanceOp;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -97,10 +101,13 @@ import static io.trino.geospatial.GeometryType.MULTI_POLYGON;
 import static io.trino.geospatial.GeometryType.POINT;
 import static io.trino.geospatial.GeometryType.POLYGON;
 import static io.trino.geospatial.GeometryUtils.getPointCount;
+import static io.trino.geospatial.GeometryUtils.jsonFromJtsGeometry;
+import static io.trino.geospatial.GeometryUtils.jtsGeometryFromJson;
 import static io.trino.geospatial.serde.GeometrySerde.deserialize;
 import static io.trino.geospatial.serde.GeometrySerde.deserializeEnvelope;
 import static io.trino.geospatial.serde.GeometrySerde.deserializeType;
 import static io.trino.geospatial.serde.GeometrySerde.serialize;
+import static io.trino.geospatial.serde.JtsGeometrySerde.serialize;
 import static io.trino.plugin.geospatial.GeometryType.GEOMETRY;
 import static io.trino.plugin.geospatial.GeometryType.GEOMETRY_TYPE_NAME;
 import static io.trino.plugin.geospatial.SphericalGeographyType.SPHERICAL_GEOGRAPHY_TYPE_NAME;
@@ -1185,6 +1192,33 @@ public final class GeoFunctions
     }
 
     @SqlNullable
+    @Description("Return the closest points on the two geometries")
+    @ScalarFunction("geometry_nearest_points")
+    @SqlType("row(" + GEOMETRY_TYPE_NAME + "," + GEOMETRY_TYPE_NAME + ")")
+    public static Block geometryNearestPoints(@SqlType(GEOMETRY_TYPE_NAME) Slice left, @SqlType(GEOMETRY_TYPE_NAME) Slice right)
+    {
+        Geometry leftGeometry = JtsGeometrySerde.deserialize(left);
+        Geometry rightGeometry = JtsGeometrySerde.deserialize(right);
+        if (leftGeometry.isEmpty() || rightGeometry.isEmpty()) {
+            return null;
+        }
+
+        RowType rowType = RowType.anonymous(ImmutableList.of(GEOMETRY, GEOMETRY));
+        PageBuilder pageBuilder = new PageBuilder(ImmutableList.of(rowType));
+        GeometryFactory geometryFactory = leftGeometry.getFactory();
+        Coordinate[] nearestCoordinates = DistanceOp.nearestPoints(leftGeometry, rightGeometry);
+
+        BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(0);
+        BlockBuilder entryBlockBuilder = blockBuilder.beginBlockEntry();
+        GEOMETRY.writeSlice(entryBlockBuilder, JtsGeometrySerde.serialize(geometryFactory.createPoint(nearestCoordinates[0])));
+        GEOMETRY.writeSlice(entryBlockBuilder, JtsGeometrySerde.serialize(geometryFactory.createPoint(nearestCoordinates[1])));
+        blockBuilder.closeEntry();
+        pageBuilder.declarePosition();
+
+        return rowType.getObject(blockBuilder, blockBuilder.getPositionCount() - 1);
+    }
+
+    @SqlNullable
     @Description("Returns a line string representing the exterior ring of the POLYGON")
     @ScalarFunction("ST_ExteriorRing")
     @SqlType(GEOMETRY_TYPE_NAME)
@@ -1394,6 +1428,23 @@ public final class GeoFunctions
         }
 
         return spatialPartitions((KdbTree) kdbTree, new Rectangle(envelope.getXMin(), envelope.getYMin(), envelope.getXMax(), envelope.getYMax()));
+    }
+
+    @ScalarFunction("from_geojson_geometry")
+    @Description("Returns a spherical geography from a GeoJSON string")
+    @SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME)
+    public static Slice fromGeoJsonGeometry(@SqlType(VARCHAR) Slice input)
+    {
+        return serialize(jtsGeometryFromJson(input.toStringUtf8()));
+    }
+
+    @SqlNullable
+    @ScalarFunction("to_geojson_geometry")
+    @Description("Returns GeoJSON string based on the input spherical geography")
+    @SqlType(VARCHAR)
+    public static Slice toGeoJsonGeometry(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice input)
+    {
+        return Slices.utf8Slice(jsonFromJtsGeometry(JtsGeometrySerde.deserialize(input)));
     }
 
     @ScalarFunction

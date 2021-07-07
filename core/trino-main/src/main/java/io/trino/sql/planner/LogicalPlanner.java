@@ -15,6 +15,7 @@ package io.trino.sql.planner;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.log.Logger;
 import io.trino.Session;
 import io.trino.cost.CachingCostProvider;
 import io.trino.cost.CachingStatsProvider;
@@ -54,12 +55,15 @@ import io.trino.sql.planner.plan.LimitNode;
 import io.trino.sql.planner.plan.OutputNode;
 import io.trino.sql.planner.plan.PlanNode;
 import io.trino.sql.planner.plan.ProjectNode;
+import io.trino.sql.planner.plan.RefreshMaterializedViewNode;
 import io.trino.sql.planner.plan.StatisticAggregations;
 import io.trino.sql.planner.plan.StatisticsWriterNode;
 import io.trino.sql.planner.plan.TableFinishNode;
 import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.sql.planner.plan.TableWriterNode;
+import io.trino.sql.planner.plan.UpdateNode;
 import io.trino.sql.planner.plan.ValuesNode;
+import io.trino.sql.planner.planprinter.PlanPrinter;
 import io.trino.sql.planner.sanity.PlanSanityChecker;
 import io.trino.sql.tree.Analyze;
 import io.trino.sql.tree.Cast;
@@ -82,6 +86,7 @@ import io.trino.sql.tree.RefreshMaterializedView;
 import io.trino.sql.tree.Row;
 import io.trino.sql.tree.Statement;
 import io.trino.sql.tree.StringLiteral;
+import io.trino.sql.tree.Update;
 import io.trino.type.TypeCoercion;
 import io.trino.type.UnknownType;
 
@@ -103,7 +108,6 @@ import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Streams.zip;
 import static io.trino.SystemSessionProperties.isCollectPlanStatisticsForAllQueries;
-import static io.trino.SystemSessionProperties.isUsePreferredWritePartitioning;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.statistics.TableStatisticType.ROW_COUNT;
 import static io.trino.spi.type.BigintType.BIGINT;
@@ -113,6 +117,7 @@ import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.analyzer.TypeSignatureTranslator.toSqlType;
 import static io.trino.sql.planner.LogicalPlanner.Stage.OPTIMIZED;
 import static io.trino.sql.planner.LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED;
+import static io.trino.sql.planner.QueryPlanner.visibleFields;
 import static io.trino.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static io.trino.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static io.trino.sql.planner.plan.TableWriterNode.CreateReference;
@@ -125,6 +130,8 @@ import static java.util.Objects.requireNonNull;
 
 public class LogicalPlanner
 {
+    private static final Logger LOG = Logger.get(LogicalPlanner.class);
+
     public enum Stage
     {
         CREATED, OPTIMIZED, OPTIMIZED_AND_VALIDATED
@@ -199,12 +206,20 @@ public class LogicalPlanner
     {
         PlanNode root = planStatement(analysis, analysis.getStatement());
 
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Initial plan:\n%s", PlanPrinter.textLogicalPlan(root, symbolAllocator.getTypes(), metadata, StatsAndCosts.empty(), session, 0, false));
+        }
+
         planSanityChecker.validateIntermediatePlan(root, session, metadata, typeOperators, typeAnalyzer, symbolAllocator.getTypes(), warningCollector);
 
         if (stage.ordinal() >= OPTIMIZED.ordinal()) {
             for (PlanOptimizer optimizer : planOptimizers) {
                 root = optimizer.optimize(root, session, symbolAllocator.getTypes(), symbolAllocator, idAllocator, warningCollector);
                 requireNonNull(root, format("%s returned a null plan", optimizer.getClass().getName()));
+
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("%s:\n%s", optimizer.getClass().getName(), PlanPrinter.textLogicalPlan(root, symbolAllocator.getTypes(), metadata, StatsAndCosts.empty(), session, 0, false));
+                }
             }
         }
 
@@ -250,12 +265,14 @@ public class LogicalPlanner
             checkState(analysis.getInsert().isPresent(), "Insert handle is missing");
             return createInsertPlan(analysis, (Insert) statement);
         }
-        else if (statement instanceof RefreshMaterializedView) {
-            checkState(analysis.getRefreshMaterializedView().isPresent(), "RefreshMaterializedViewAnalysis handle is missing");
+        if (statement instanceof RefreshMaterializedView) {
             return createRefreshMaterializedViewPlan(analysis);
         }
-        else if (statement instanceof Delete) {
+        if (statement instanceof Delete) {
             return createDeletePlan(analysis, (Delete) statement);
+        }
+        if (statement instanceof Update) {
+            return createUpdatePlan(analysis, (Update) statement);
         }
         if (statement instanceof Query) {
             return createRelationPlan(analysis, (Query) statement);
@@ -314,7 +331,7 @@ public class LogicalPlanner
                 idAllocator.getNextId(),
                 new AggregationNode(
                         idAllocator.getNextId(),
-                        TableScanNode.newInstance(idAllocator.getNextId(), targetTable, tableScanOutputs.build(), symbolToColumnHandle.build(), false),
+                        TableScanNode.newInstance(idAllocator.getNextId(), targetTable, tableScanOutputs.build(), symbolToColumnHandle.build(), false, Optional.empty()),
                         statisticAggregations.getAggregations(),
                         singleGroupingSet(groupingSymbols),
                         ImmutableList.of(),
@@ -352,7 +369,8 @@ public class LogicalPlanner
 
         return createTableWriterPlan(
                 analysis,
-                plan,
+                plan.getRoot(),
+                visibleFields(plan),
                 new CreateReference(destination.getCatalogName(), tableMetadata, newTableLayout),
                 columnNames,
                 tableMetadata.getColumns(),
@@ -427,22 +445,24 @@ public class LogicalPlanner
 
         if (isMaterializedViewRefresh) {
             return createTableWriterPlan(
-                analysis,
-                plan,
-                requireNonNull(writerTarget, "writerTarget for materialized view refresh is null"),
-                insertedTableColumnNames,
-                insertedColumns,
-                newTableLayout,
-                statisticsMetadata);
+                    analysis,
+                    plan.getRoot(),
+                    plan.getFieldMappings(),
+                    requireNonNull(writerTarget, "writerTarget for materialized view refresh is null"),
+                    insertedTableColumnNames,
+                    insertedColumns,
+                    newTableLayout,
+                    statisticsMetadata);
         }
         InsertReference insertTarget = new InsertReference(
                 tableHandle,
                 insertedTableColumnNames.stream()
-                    .map(columns::get)
-                    .collect(toImmutableList()));
+                        .map(columns::get)
+                        .collect(toImmutableList()));
         return createTableWriterPlan(
                 analysis,
-                plan,
+                plan.getRoot(),
+                plan.getFieldMappings(),
                 insertTarget,
                 insertedTableColumnNames,
                 insertedColumns,
@@ -461,6 +481,16 @@ public class LogicalPlanner
 
     private RelationPlan createRefreshMaterializedViewPlan(Analysis analysis)
     {
+        Optional<QualifiedObjectName> delegatedRefreshMaterializedView = analysis.getDelegatedRefreshMaterializedView();
+        if (delegatedRefreshMaterializedView.isPresent()) {
+            return new RelationPlan(
+                    new RefreshMaterializedViewNode(idAllocator.getNextId(), delegatedRefreshMaterializedView.get()),
+                    analysis.getRootScope(),
+                    ImmutableList.of(),
+                    Optional.empty());
+        }
+
+        checkState(analysis.getRefreshMaterializedView().isPresent(), "RefreshMaterializedViewAnalysis handle is missing");
         Analysis.RefreshMaterializedViewAnalysis viewAnalysis = analysis.getRefreshMaterializedView().get();
         TableHandle tableHandle = viewAnalysis.getTarget();
         Query query = viewAnalysis.getQuery();
@@ -472,18 +502,16 @@ public class LogicalPlanner
 
     private RelationPlan createTableWriterPlan(
             Analysis analysis,
-            RelationPlan plan,
+            PlanNode source,
+            List<Symbol> symbols,
             WriterTarget target,
             List<String> columnNames,
             List<ColumnMetadata> columnMetadataList,
             Optional<NewTableLayout> writeTableLayout,
             TableStatisticsMetadata statisticsMetadata)
     {
-        PlanNode source = plan.getRoot();
-
-        List<Symbol> symbols = plan.getFieldMappings();
-
         Optional<PartitioningScheme> partitioningScheme = Optional.empty();
+        Optional<PartitioningScheme> preferredPartitioningScheme = Optional.empty();
         if (writeTableLayout.isPresent()) {
             List<Symbol> partitionFunctionArguments = new ArrayList<>();
             writeTableLayout.get().getPartitionColumns().stream()
@@ -499,10 +527,9 @@ public class LogicalPlanner
                         Partitioning.create(partitioningHandle.get(), partitionFunctionArguments),
                         outputLayout));
             }
-            else if (isUsePreferredWritePartitioning(session)) {
-                // TODO: move to iterative optimizer and use CBO
+            else {
                 // empty connector partitioning handle means evenly partitioning on partitioning columns
-                partitioningScheme = Optional.of(new PartitioningScheme(
+                preferredPartitioningScheme = Optional.of(new PartitioningScheme(
                         Partitioning.create(FIXED_HASH_DISTRIBUTION, partitionFunctionArguments),
                         outputLayout));
             }
@@ -541,6 +568,7 @@ public class LogicalPlanner
                             columnNames,
                             notNullColumnSymbols,
                             partitioningScheme,
+                            preferredPartitioningScheme,
                             Optional.of(partialAggregation),
                             Optional.of(result.getDescriptor().map(aggregations.getMappings()::get))),
                     target,
@@ -563,6 +591,7 @@ public class LogicalPlanner
                         columnNames,
                         notNullColumnSymbols,
                         partitioningScheme,
+                        preferredPartitioningScheme,
                         Optional.empty(),
                         Optional.empty()),
                 target,
@@ -635,6 +664,22 @@ public class LogicalPlanner
                 idAllocator.getNextId(),
                 deleteNode,
                 deleteNode.getTarget(),
+                symbolAllocator.newSymbol("rows", BIGINT),
+                Optional.empty(),
+                Optional.empty());
+
+        return new RelationPlan(commitNode, analysis.getScope(node), commitNode.getOutputSymbols(), Optional.empty());
+    }
+
+    private RelationPlan createUpdatePlan(Analysis analysis, Update node)
+    {
+        UpdateNode updateNode = new QueryPlanner(analysis, symbolAllocator, idAllocator, buildLambdaDeclarationToSymbolMap(analysis, symbolAllocator), metadata, Optional.empty(), session, ImmutableMap.of())
+                .plan(node);
+
+        TableFinishNode commitNode = new TableFinishNode(
+                idAllocator.getNextId(),
+                updateNode,
+                updateNode.getTarget(),
                 symbolAllocator.newSymbol("rows", BIGINT),
                 Optional.empty(),
                 Optional.empty());

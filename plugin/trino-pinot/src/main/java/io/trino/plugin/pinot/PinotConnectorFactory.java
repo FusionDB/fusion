@@ -18,6 +18,7 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import io.airlift.bootstrap.Bootstrap;
 import io.airlift.json.JsonModule;
+import io.trino.plugin.base.TypeDeserializerModule;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorFactory;
@@ -54,13 +55,14 @@ public class PinotConnectorFactory
     @Override
     public Connector create(String catalogName, Map<String, String> config, ConnectorContext context)
     {
-        requireNonNull(catalogName, "connectorId is null");
+        requireNonNull(catalogName, "catalogName is null");
         requireNonNull(config, "config is null");
 
         ImmutableList.Builder<Module> modulesBuilder = ImmutableList.<Module>builder()
                 .add(new JsonModule())
                 .add(new MBeanModule())
-                .add(new PinotModule(catalogName, context.getTypeManager(), context.getNodeManager()));
+                .add(new TypeDeserializerModule(context.getTypeManager()))
+                .add(new PinotModule(catalogName, context.getNodeManager()));
 
         extension.ifPresent(modulesBuilder::add);
 

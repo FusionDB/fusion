@@ -70,6 +70,7 @@ import io.trino.sql.planner.plan.TopNNode;
 import io.trino.sql.planner.plan.TopNRankingNode;
 import io.trino.sql.planner.plan.UnionNode;
 import io.trino.sql.planner.plan.UnnestNode;
+import io.trino.sql.planner.plan.UpdateNode;
 import io.trino.sql.planner.plan.ValuesNode;
 import io.trino.sql.planner.plan.WindowNode;
 import io.trino.sql.tree.Expression;
@@ -240,6 +241,7 @@ public class PruneUnreferencedOutputs
                     node.getCriteria(),
                     leftOutputSymbols,
                     rightOutputSymbols,
+                    node.isMaySkipOutputDuplicates(),
                     node.getFilter(),
                     node.getLeftHashSymbol(),
                     node.getRightHashSymbol(),
@@ -295,10 +297,10 @@ public class PruneUnreferencedOutputs
                     .build();
 
             ImmutableSet.Builder<Symbol> leftInputs = ImmutableSet.builder();
-            node.getLeftPartitionSymbol().map(leftInputs::add);
+            node.getLeftPartitionSymbol().ifPresent(leftInputs::add);
 
             ImmutableSet.Builder<Symbol> rightInputs = ImmutableSet.builder();
-            node.getRightPartitionSymbol().map(rightInputs::add);
+            node.getRightPartitionSymbol().ifPresent(rightInputs::add);
 
             PlanNode left = context.rewrite(node.getLeft(), leftInputs.addAll(requiredInputs).build());
             PlanNode right = context.rewrite(node.getRight(), rightInputs.addAll(requiredInputs).build());
@@ -561,9 +563,10 @@ public class PruneUnreferencedOutputs
         {
             ImmutableSet.Builder<Symbol> expectedInputs = ImmutableSet.<Symbol>builder()
                     .addAll(context.get())
-                    .addAll(node.getTiesResolvingScheme().map(OrderingScheme::getOrderBy).orElse(ImmutableList.of()));
+                    .addAll(node.getTiesResolvingScheme().map(OrderingScheme::getOrderBy).orElse(ImmutableList.of()))
+                    .addAll(node.getPreSortedInputs());
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
-            return new LimitNode(node.getId(), source, node.getCount(), node.getTiesResolvingScheme(), node.isPartial());
+            return new LimitNode(node.getId(), source, node.getCount(), node.getTiesResolvingScheme(), node.isPartial(), node.getPreSortedInputs());
         }
 
         @Override
@@ -679,6 +682,7 @@ public class PruneUnreferencedOutputs
                     node.getColumnNames(),
                     node.getNotNullColumnSymbols(),
                     node.getPartitioningScheme(),
+                    node.getPreferredPartitioningScheme(),
                     node.getStatisticsAggregation(),
                     node.getStatisticsAggregationDescriptor());
         }
@@ -714,6 +718,13 @@ public class PruneUnreferencedOutputs
         {
             PlanNode source = context.rewrite(node.getSource(), ImmutableSet.of(node.getRowId()));
             return new DeleteNode(node.getId(), source, node.getTarget(), node.getRowId(), node.getOutputSymbols());
+        }
+
+        @Override
+        public PlanNode visitUpdate(UpdateNode node, RewriteContext<Set<Symbol>> context)
+        {
+            PlanNode source = context.rewrite(node.getSource(), ImmutableSet.copyOf(node.getColumnValueAndRowIdSymbols()));
+            return new UpdateNode(node.getId(), source, node.getTarget(), node.getRowId(), node.getColumnValueAndRowIdSymbols(), node.getOutputSymbols());
         }
 
         @Override

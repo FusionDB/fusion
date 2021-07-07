@@ -43,6 +43,7 @@ import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.statistics.TableStatisticType.ROW_COUNT;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static java.util.Objects.requireNonNull;
 
@@ -113,6 +114,9 @@ public class StatisticsAggregationPlanner
                 return createAggregation(QualifiedName.of("max"), input.toSymbolReference(), inputType, inputType);
             case NUMBER_OF_DISTINCT_VALUES:
                 return createAggregation(QualifiedName.of("approx_distinct"), input.toSymbolReference(), inputType, BIGINT);
+            case NUMBER_OF_DISTINCT_VALUES_SUMMARY:
+                // we use $approx_set here and not approx_set because latter is not defined for all types supported by Trino
+                return createAggregation(QualifiedName.of("$approx_set"), input.toSymbolReference(), inputType, HYPER_LOG_LOG);
             case NUMBER_OF_NON_NULL_VALUES:
                 return createAggregation(QualifiedName.of("count"), input.toSymbolReference(), inputType, BIGINT);
             case NUMBER_OF_TRUE_VALUES:
@@ -121,9 +125,8 @@ public class StatisticsAggregationPlanner
                 return createAggregation(QualifiedName.of(SumDataSizeForStats.NAME), input.toSymbolReference(), inputType, BIGINT);
             case MAX_VALUE_SIZE_IN_BYTES:
                 return createAggregation(QualifiedName.of(MaxDataSizeForStats.NAME), input.toSymbolReference(), inputType, BIGINT);
-            default:
-                throw new IllegalArgumentException("Unsupported statistic type: " + statisticType);
         }
+        throw new IllegalArgumentException("Unsupported statistic type: " + statisticType);
     }
 
     private ColumnStatisticsAggregation createAggregation(QualifiedName functionName, SymbolReference input, Type inputType, Type outputType)
@@ -151,7 +154,7 @@ public class StatisticsAggregationPlanner
                 StatisticAggregations aggregations,
                 StatisticAggregationsDescriptor<Symbol> descriptor)
         {
-            this.aggregations = requireNonNull(aggregations, "statisticAggregations is null");
+            this.aggregations = requireNonNull(aggregations, "aggregations is null");
             this.descriptor = requireNonNull(descriptor, "descriptor is null");
         }
 

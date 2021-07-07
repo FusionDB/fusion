@@ -18,6 +18,20 @@ div.highlight {
     color: #F57C00;
 }
 
+.md-typeset span[id]:target:before {
+    display:block;
+    margin-top:-40px;
+    padding-top:40px;
+    content:"";
+}
+
+.md-typeset dl[id]:target:before {
+    display:block;
+    margin-top:-82px;
+    padding-top:82px;
+    content:"";
+}
+
 .md-nav__button img {
     height: 48px;
 }
@@ -43,7 +57,7 @@ pre.literal-block {
 }
 
 .md-typeset .admonition, .md-typeset .admonition-title {
-    font-size: 0.64rem
+    font-size: 0.8rem
 }
 
 @media only screen and (min-width: 88.25em) {

@@ -21,7 +21,7 @@ import java.util.Objects;
 import static io.trino.spi.connector.SchemaUtil.checkNotEmpty;
 import static java.util.Locale.ENGLISH;
 
-public class SchemaTableName
+public final class SchemaTableName
 {
     private final String schemaName;
     private final String tableName;
@@ -31,6 +31,11 @@ public class SchemaTableName
     {
         this.schemaName = checkNotEmpty(schemaName, "schemaName").toLowerCase(ENGLISH);
         this.tableName = checkNotEmpty(tableName, "tableName").toLowerCase(ENGLISH);
+    }
+
+    public static SchemaTableName schemaTableName(String schemaName, String tableName)
+    {
+        return new SchemaTableName(schemaName, tableName);
     }
 
     @JsonProperty("schema")

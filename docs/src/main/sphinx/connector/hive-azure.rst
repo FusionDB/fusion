@@ -17,7 +17,7 @@ Hive connector configuration
 
 All configuration for the Azure storage driver is stored in the Hadoop
 ``core-site.xml`` configuration file. The path to the file needs to be
-configured in the the catalog properties file:
+configured in the catalog properties file:
 
 .. code-block:: text
 
@@ -115,6 +115,9 @@ catalog configuration.
     - Value of the new client (application) secret created
   * - ``hive.azure.adl-refresh-url``
     - OAuth 2.0 token endpoint url
+  * - ``hive.azure.adl-proxy-host``
+    - Proxy host and port in ``host:port`` format. Use this property to connect
+      to an ADLS endpoint via a SOCKS proxy.
 
 Accessing Azure Storage data
 ----------------------------

@@ -4,12 +4,12 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>352-SNAPSHOT</version>
+        <version>360-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>trino-teradata-functions</artifactId>
-    <description>Teradata's specific functions for Presto</description>
+    <description>Teradata's specific functions for Trino</description>
     <packaging>trino-plugin</packaging>
 
     <properties>

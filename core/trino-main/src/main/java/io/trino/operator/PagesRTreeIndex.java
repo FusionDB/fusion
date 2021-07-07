@@ -19,6 +19,7 @@ import io.airlift.slice.Slice;
 import io.trino.Session;
 import io.trino.geospatial.Rectangle;
 import io.trino.operator.SpatialIndexBuilderOperator.SpatialPredicate;
+import io.trino.operator.join.JoinFilterFunction;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.block.Block;
@@ -37,9 +38,9 @@ import java.util.OptionalDouble;
 
 import static com.google.common.base.Verify.verifyNotNull;
 import static io.trino.geospatial.serde.GeometrySerde.deserialize;
-import static io.trino.operator.JoinUtils.channelsToPages;
 import static io.trino.operator.SyntheticAddress.decodePosition;
 import static io.trino.operator.SyntheticAddress.decodeSliceIndex;
+import static io.trino.operator.join.JoinUtils.channelsToPages;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static java.lang.Math.toIntExact;
@@ -114,7 +115,7 @@ public class PagesRTreeIndex
         this.channels = requireNonNull(channels, "channels is null");
         this.rtree = requireNonNull(rtree, "rtree is null");
         this.radiusChannel = radiusChannel.orElse(-1);
-        this.spatialRelationshipTest = requireNonNull(spatialRelationshipTest, "spatial relationship is null");
+        this.spatialRelationshipTest = requireNonNull(spatialRelationshipTest, "spatialRelationshipTest is null");
         this.filterFunction = filterFunctionFactory.map(factory -> factory.create(session.toConnectorSession(), addresses, channelsToPages(channels))).orElse(null);
         this.partitions = requireNonNull(partitions, "partitions is null");
     }

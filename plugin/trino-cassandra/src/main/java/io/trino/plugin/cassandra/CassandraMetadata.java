@@ -239,7 +239,8 @@ public class CassandraMetadata
                         handle.getTableName(),
                         Optional.of(partitionResult.getPartitions()),
                         clusteringKeyPredicates),
-                        unenforcedConstraint));
+                        unenforcedConstraint,
+                        false));
     }
 
     @Override
@@ -269,12 +270,6 @@ public class CassandraMetadata
         }
 
         cassandraSession.execute(format("DROP TABLE \"%s\".\"%s\"", cassandraTableHandle.getSchemaName(), cassandraTableHandle.getTableName()));
-    }
-
-    @Override
-    public void renameTable(ConnectorSession session, ConnectorTableHandle tableHandle, SchemaTableName newTableName)
-    {
-        throw new TrinoException(NOT_SUPPORTED, "Renaming tables not yet supported for Cassandra");
     }
 
     @Override
@@ -373,7 +368,7 @@ public class CassandraMetadata
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         return new CassandraColumnHandle("$update_row_id", 0, CassandraType.TEXT, false, false, false, true);
     }
@@ -381,7 +376,7 @@ public class CassandraMetadata
     @Override
     public ConnectorTableHandle beginDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        throw new TrinoException(NOT_SUPPORTED, "This connector only supports delete with primary key or partition key");
+        throw new TrinoException(NOT_SUPPORTED, "Delete without primary key or partition key is not supported");
     }
 
     @Override
@@ -396,7 +391,7 @@ public class CassandraMetadata
         CassandraTableHandle handle = (CassandraTableHandle) deleteHandle;
         Optional<List<CassandraPartition>> partitions = handle.getPartitions();
         if (partitions.isEmpty()) {
-            throw new TrinoException(NOT_SUPPORTED, "Deleting without partition key is unsupported");
+            throw new TrinoException(NOT_SUPPORTED, "Deleting without partition key is not supported");
         }
         if (partitions.get().isEmpty()) {
             // there are no records of a given partition key

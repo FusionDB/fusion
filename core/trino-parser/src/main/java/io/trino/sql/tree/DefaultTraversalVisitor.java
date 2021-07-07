@@ -199,12 +199,21 @@ public abstract class DefaultTraversalVisitor<C>
         }
 
         if (node.getWindow().isPresent()) {
-            process(node.getWindow().get(), context);
+            process((Node) node.getWindow().get(), context);
         }
 
         if (node.getFilter().isPresent()) {
             process(node.getFilter().get(), context);
         }
+
+        return null;
+    }
+
+    @Override
+    protected Void visitWindowOperation(WindowOperation node, C context)
+    {
+        process(node.getName(), context);
+        process((Node) node.getWindow(), context);
 
         return null;
     }
@@ -227,8 +236,20 @@ public abstract class DefaultTraversalVisitor<C>
     }
 
     @Override
-    public Void visitWindow(Window node, C context)
+    protected Void visitWindowReference(WindowReference node, C context)
     {
+        process(node.getName(), context);
+
+        return null;
+    }
+
+    @Override
+    public Void visitWindowSpecification(WindowSpecification node, C context)
+    {
+        if (node.getExistingWindowName().isPresent()) {
+            process(node.getExistingWindowName().get(), context);
+        }
+
         for (Expression expression : node.getPartitionBy()) {
             process(expression, context);
         }
@@ -245,13 +266,41 @@ public abstract class DefaultTraversalVisitor<C>
     }
 
     @Override
+    protected Void visitWindowDefinition(WindowDefinition node, C context)
+    {
+        process(node.getWindow());
+
+        return null;
+    }
+
+    @Override
     public Void visitWindowFrame(WindowFrame node, C context)
     {
         process(node.getStart(), context);
         if (node.getEnd().isPresent()) {
             process(node.getEnd().get(), context);
         }
+        for (MeasureDefinition measureDefinition : node.getMeasures()) {
+            process(measureDefinition, context);
+        }
+        for (VariableDefinition variableDefinition : node.getVariableDefinitions()) {
+            process(variableDefinition, context);
+        }
 
+        return null;
+    }
+
+    @Override
+    protected Void visitMeasureDefinition(MeasureDefinition node, C context)
+    {
+        process(node.getExpression(), context);
+        return null;
+    }
+
+    @Override
+    protected Void visitVariableDefinition(VariableDefinition node, C context)
+    {
+        process(node.getExpression(), context);
         return null;
     }
 
@@ -450,6 +499,9 @@ public abstract class DefaultTraversalVisitor<C>
         if (node.getHaving().isPresent()) {
             process(node.getHaving().get(), context);
         }
+        for (WindowDefinition windowDefinition : node.getWindows()) {
+            process(windowDefinition, context);
+        }
         if (node.getOrderBy().isPresent()) {
             process(node.getOrderBy().get(), context);
         }
@@ -519,7 +571,7 @@ public abstract class DefaultTraversalVisitor<C>
 
         node.getCriteria()
                 .filter(criteria -> criteria instanceof JoinOn)
-                .map(criteria -> process(((JoinOn) criteria).getExpression(), context));
+                .ifPresent(criteria -> process(((JoinOn) criteria).getExpression(), context));
 
         return null;
     }
@@ -592,6 +644,62 @@ public abstract class DefaultTraversalVisitor<C>
         process(node.getTable(), context);
         node.getWhere().ifPresent(where -> process(where, context));
 
+        return null;
+    }
+
+    @Override
+    protected Void visitUpdate(Update node, C context)
+    {
+        process(node.getTable(), context);
+        node.getAssignments().forEach(value -> process(value, context));
+        node.getWhere().ifPresent(where -> process(where, context));
+
+        return null;
+    }
+
+    @Override
+    protected Void visitUpdateAssignment(UpdateAssignment node, C context)
+    {
+        process(node.getName(), context);
+        process(node.getValue(), context);
+        return null;
+    }
+
+    @Override
+    protected Void visitMerge(Merge node, C context)
+    {
+        process(node.getTable(), context);
+        node.getTargetAlias().ifPresent(target -> process(target, context));
+        process(node.getRelation(), context);
+        process(node.getExpression(), context);
+        node.getMergeCases().forEach(mergeCase -> process(mergeCase, context));
+        return null;
+    }
+
+    @Override
+    protected Void visitMergeInsert(MergeInsert node, C context)
+    {
+        node.getExpression().ifPresent(expression -> process(expression, context));
+        node.getColumns().forEach(column -> process(column, context));
+        node.getValues().forEach(expression -> process(expression, context));
+        return null;
+    }
+
+    @Override
+    protected Void visitMergeUpdate(MergeUpdate node, C context)
+    {
+        node.getExpression().ifPresent(expression -> process(expression, context));
+        node.getAssignments().forEach(assignment -> {
+            process(assignment.getTarget(), context);
+            process(assignment.getValue(), context);
+        });
+        return null;
+    }
+
+    @Override
+    protected Void visitMergeDelete(MergeDelete node, C context)
+    {
+        node.getExpression().ifPresent(expression -> process(expression, context));
         return null;
     }
 
@@ -684,6 +792,13 @@ public abstract class DefaultTraversalVisitor<C>
     }
 
     @Override
+    protected Void visitShowStats(ShowStats node, C context)
+    {
+        process(node.getRelation(), context);
+        return null;
+    }
+
+    @Override
     protected Void visitQuantifiedComparisonExpression(QuantifiedComparisonExpression node, C context)
     {
         process(node.getValue(), context);
@@ -712,6 +827,68 @@ public abstract class DefaultTraversalVisitor<C>
     protected Void visitLambdaExpression(LambdaExpression node, C context)
     {
         process(node.getBody(), context);
+
+        return null;
+    }
+
+    @Override
+    protected Void visitExcludedPattern(ExcludedPattern node, C context)
+    {
+        process(node.getPattern(), context);
+
+        return null;
+    }
+
+    @Override
+    protected Void visitPatternAlternation(PatternAlternation node, C context)
+    {
+        for (RowPattern rowPattern : node.getPatterns()) {
+            process(rowPattern, context);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected Void visitPatternConcatenation(PatternConcatenation node, C context)
+    {
+        for (RowPattern rowPattern : node.getPatterns()) {
+            process(rowPattern, context);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected Void visitPatternPermutation(PatternPermutation node, C context)
+    {
+        for (RowPattern rowPattern : node.getPatterns()) {
+            process(rowPattern, context);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected Void visitPatternVariable(PatternVariable node, C context)
+    {
+        process(node.getName(), context);
+
+        return null;
+    }
+
+    @Override
+    protected Void visitQuantifiedPattern(QuantifiedPattern node, C context)
+    {
+        process(node.getPattern(), context);
+
+        return null;
+    }
+
+    @Override
+    protected Void visitLabelDereference(LabelDereference node, C context)
+    {
+        process(node.getReference(), context);
 
         return null;
     }

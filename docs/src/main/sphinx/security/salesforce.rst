@@ -13,14 +13,21 @@ basic credentials.  This can also be used to secure the :ref:`Web UI <web-ui-aut
 .. note::
 
     This is *not* a Salesforce connector, and does not allow users to query
-    Salesforce data. It's simply a means by which users can authenticate to Trino, similar
-    to :doc:`ldap` or :doc:`password-file`.
+    Salesforce data. Salesforce authentication is simply a means by which users
+    can authenticate to Trino, similar to :doc:`ldap` or :doc:`password-file`.
 
 Salesforce authenticator configuration
 --------------------------------------
 
-Enable Salesforce authentication by creating an
-``etc/password-authenticator.properties`` file on the coordinator:
+To enable Salesfore authentication, set the :doc:`password authentication
+type <authentication-types>` in ``etc/config.properties``:
+
+.. code-block:: properties
+
+    http-server.authentication.type=PASSWORD
+
+In addition, create a ``etc/password-authenticator.properties`` file on the
+coordinator with the ``salesforce`` authenticator name:
 
 .. code-block:: properties
 

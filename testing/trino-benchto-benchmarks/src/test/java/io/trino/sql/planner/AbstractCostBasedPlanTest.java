@@ -122,7 +122,7 @@ public abstract class AbstractCostBasedPlanTest
         return joinOrderPrinter.result();
     }
 
-    private static Path getSourcePath()
+    protected Path getSourcePath()
     {
         Path workingDir = Paths.get(System.getProperty("user.dir"));
         verify(isDirectory(workingDir), "Working directory is not a directory");
@@ -130,7 +130,7 @@ public abstract class AbstractCostBasedPlanTest
         switch (topDirectoryName) {
             case "trino-benchto-benchmarks":
                 return workingDir;
-            case "presto":
+            case "trino":
                 return workingDir.resolve("testing/trino-benchto-benchmarks");
             default:
                 throw new IllegalStateException("This class must be executed from trino-benchto-benchmarks or Trino source directory");
@@ -154,10 +154,20 @@ public abstract class AbstractCostBasedPlanTest
                     .orElseThrow(() -> new VerifyException("Expected distribution type to be set"));
             if (node.isCrossJoin()) {
                 checkState(node.getType() == INNER && distributionType == REPLICATED, "Expected CROSS JOIN to be INNER REPLICATED");
-                output(indent, "cross join:");
+                if (node.isMaySkipOutputDuplicates()) {
+                    output(indent, "cross join (can skip output duplicates):");
+                }
+                else {
+                    output(indent, "cross join:");
+                }
             }
             else {
-                output(indent, "join (%s, %s):", node.getType(), distributionType);
+                if (node.isMaySkipOutputDuplicates()) {
+                    output(indent, "join (%s, %s, can skip output duplicates):", node.getType(), distributionType);
+                }
+                else {
+                    output(indent, "join (%s, %s):", node.getType(), distributionType);
+                }
             }
 
             return visitPlan(node, indent + 1);

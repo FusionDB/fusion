@@ -484,57 +484,28 @@ public final class ExpressionTreeRewriter<C>
                 filter = Optional.of(newFilterExpression);
             }
 
-            Optional<Window> rewrittenWindow = node.getWindow();
-            if (node.getWindow().isPresent()) {
-                Window window = node.getWindow().get();
-
-                List<Expression> partitionBy = rewrite(window.getPartitionBy(), context);
-
-                Optional<OrderBy> orderBy = Optional.empty();
-                if (window.getOrderBy().isPresent()) {
-                    orderBy = Optional.of(rewriteOrderBy(window.getOrderBy().get(), context));
-                }
-
-                Optional<WindowFrame> rewrittenFrame = window.getFrame();
-                if (rewrittenFrame.isPresent()) {
-                    WindowFrame frame = rewrittenFrame.get();
-
-                    FrameBound start = frame.getStart();
-                    if (start.getValue().isPresent()) {
-                        Expression value = rewrite(start.getValue().get(), context.get());
-                        if (value != start.getValue().get()) {
-                            start = new FrameBound(start.getType(), value);
-                        }
-                    }
-
-                    Optional<FrameBound> rewrittenEnd = frame.getEnd();
-                    if (rewrittenEnd.isPresent()) {
-                        Optional<Expression> value = rewrittenEnd.get().getValue();
-                        if (value.isPresent()) {
-                            Expression rewrittenValue = rewrite(value.get(), context.get());
-                            if (rewrittenValue != value.get()) {
-                                rewrittenEnd = Optional.of(new FrameBound(rewrittenEnd.get().getType(), rewrittenValue));
-                            }
-                        }
-                    }
-
-                    if ((frame.getStart() != start) || !sameElements(frame.getEnd(), rewrittenEnd)) {
-                        rewrittenFrame = Optional.of(new WindowFrame(frame.getType(), start, rewrittenEnd));
-                    }
-                }
-
-                if (!sameElements(window.getPartitionBy(), partitionBy) ||
-                        !sameElements(window.getOrderBy(), orderBy) ||
-                        !sameElements(window.getFrame(), rewrittenFrame)) {
-                    rewrittenWindow = Optional.of(new Window(partitionBy, orderBy, rewrittenFrame));
+            Optional<Window> window = node.getWindow();
+            if (window.isPresent()) {
+                Window rewrittenWindow = rewriteWindow(window.get(), context);
+                if (rewrittenWindow != window.get()) {
+                    window = Optional.of(rewrittenWindow);
                 }
             }
 
             List<Expression> arguments = rewrite(node.getArguments(), context);
 
-            if (!sameElements(node.getArguments(), arguments) || !sameElements(rewrittenWindow, node.getWindow())
+            if (!sameElements(node.getArguments(), arguments) || !sameElements(window, node.getWindow())
                     || !sameElements(filter, node.getFilter())) {
-                return new FunctionCall(node.getLocation(), node.getName(), rewrittenWindow, filter, node.getOrderBy().map(orderBy -> rewriteOrderBy(orderBy, context)), node.isDistinct(), node.getNullTreatment(), arguments);
+                return new FunctionCall(
+                        node.getLocation(),
+                        node.getName(),
+                        window,
+                        filter,
+                        node.getOrderBy().map(orderBy -> rewriteOrderBy(orderBy, context)),
+                        node.isDistinct(),
+                        node.getNullTreatment(),
+                        node.getProcessingMode(),
+                        arguments);
             }
             return node;
         }
@@ -563,6 +534,106 @@ public final class ExpressionTreeRewriter<C>
                 }
             }
             return rewrittenSortItems.build();
+        }
+
+        private Window rewriteWindow(Window window, Context<C> context)
+        {
+            if (window instanceof WindowReference) {
+                WindowReference windowReference = (WindowReference) window;
+                Identifier rewrittenName = rewrite(windowReference.getName(), context.get());
+                if (windowReference.getName() != rewrittenName) {
+                    return new WindowReference(rewrittenName);
+                }
+                return window;
+            }
+
+            WindowSpecification windowSpecification = (WindowSpecification) window;
+            Optional<Identifier> existingWindowName = windowSpecification.getExistingWindowName().map(name -> rewrite(name, context.get()));
+
+            List<Expression> partitionBy = rewrite(windowSpecification.getPartitionBy(), context);
+
+            Optional<OrderBy> orderBy = Optional.empty();
+            if (windowSpecification.getOrderBy().isPresent()) {
+                orderBy = Optional.of(rewriteOrderBy(windowSpecification.getOrderBy().get(), context));
+            }
+
+            Optional<WindowFrame> rewrittenFrame = windowSpecification.getFrame();
+            if (rewrittenFrame.isPresent()) {
+                WindowFrame frame = rewrittenFrame.get();
+
+                FrameBound start = frame.getStart();
+                if (start.getValue().isPresent()) {
+                    Expression value = rewrite(start.getValue().get(), context.get());
+                    if (value != start.getValue().get()) {
+                        start = new FrameBound(start.getType(), value);
+                    }
+                }
+
+                Optional<FrameBound> rewrittenEnd = frame.getEnd();
+                if (rewrittenEnd.isPresent()) {
+                    Optional<Expression> value = rewrittenEnd.get().getValue();
+                    if (value.isPresent()) {
+                        Expression rewrittenValue = rewrite(value.get(), context.get());
+                        if (rewrittenValue != value.get()) {
+                            rewrittenEnd = Optional.of(new FrameBound(rewrittenEnd.get().getType(), rewrittenValue));
+                        }
+                    }
+                }
+
+                // Frame properties for row pattern matching are not rewritten. They are planned as parts of
+                // PatternRecognitionNode, and shouldn't be accessed past the Planner phase.
+                // There are nested expressions in Measures and VariableDefinitions. They are not rewritten by default.
+                // Rewriting them requires special handling of DereferenceExpression, aware of pattern labels.
+                if (!frame.getMeasures().isEmpty() ||
+                        frame.getAfterMatchSkipTo().isPresent() ||
+                        frame.getPatternSearchMode().isPresent() ||
+                        frame.getPattern().isPresent() ||
+                        !frame.getSubsets().isEmpty() ||
+                        !frame.getVariableDefinitions().isEmpty()) {
+                    throw new UnsupportedOperationException("cannot rewrite pattern recognition clauses in window");
+                }
+
+                if ((frame.getStart() != start) || !sameElements(frame.getEnd(), rewrittenEnd)) {
+                    rewrittenFrame = Optional.of(new WindowFrame(
+                            frame.getType(),
+                            start,
+                            rewrittenEnd,
+                            frame.getMeasures(),
+                            frame.getAfterMatchSkipTo(),
+                            frame.getPatternSearchMode(),
+                            frame.getPattern(),
+                            frame.getSubsets(),
+                            frame.getVariableDefinitions()));
+                }
+            }
+
+            if (!sameElements(windowSpecification.getExistingWindowName(), existingWindowName) ||
+                    !sameElements(windowSpecification.getPartitionBy(), partitionBy) ||
+                    !sameElements(windowSpecification.getOrderBy(), orderBy) ||
+                    !sameElements(windowSpecification.getFrame(), rewrittenFrame)) {
+                return new WindowSpecification(existingWindowName, partitionBy, orderBy, rewrittenFrame);
+            }
+            return window;
+        }
+
+        @Override
+        protected Expression visitWindowOperation(WindowOperation node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteWindowOperation(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            Identifier name = rewrite(node.getName(), context.get());
+            Window window = rewriteWindow(node.getWindow(), context);
+
+            if (name != node.getName() || window != node.getWindow()) {
+                return new WindowOperation(name, window);
+            }
+
+            return node;
         }
 
         @Override
@@ -833,7 +904,9 @@ public final class ExpressionTreeRewriter<C>
                     }
                 }
 
-                if (dataType != field.getType() || name != field.getName()) {
+                @SuppressWarnings("OptionalEquality")
+                boolean nameRewritten = name != field.getName();
+                if (dataType != field.getType() || nameRewritten) {
                     rewritten.add(new RowDataType.Field(field.getLocation(), name, dataType));
                 }
                 else {
@@ -975,6 +1048,32 @@ public final class ExpressionTreeRewriter<C>
         }
 
         @Override
+        protected Expression visitCurrentCatalog(CurrentCatalog node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteCurrentCatalog(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            return node;
+        }
+
+        @Override
+        protected Expression visitCurrentSchema(CurrentSchema node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteCurrentSchema(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            return node;
+        }
+
+        @Override
         protected Expression visitCurrentUser(CurrentUser node, Context<C> context)
         {
             if (!context.isDefaultRewrite()) {
@@ -1013,6 +1112,24 @@ public final class ExpressionTreeRewriter<C>
             List<Expression> arguments = rewrite(node.getArguments(), context);
             if (!sameElements(node.getArguments(), arguments)) {
                 return new Format(arguments);
+            }
+
+            return node;
+        }
+
+        @Override
+        protected Expression visitLabelDereference(LabelDereference node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteLabelDereference(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            SymbolReference reference = rewrite(node.getReference(), context.get());
+            if (node.getReference() != reference) {
+                return new LabelDereference(node.getLabel(), reference);
             }
 
             return node;

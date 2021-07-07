@@ -47,8 +47,7 @@ public class PrometheusMetadata
     @Inject
     public PrometheusMetadata(PrometheusClient prometheusClient)
     {
-        this.prometheusClient = prometheusClient;
-        requireNonNull(this.prometheusClient, "client is null");
+        this.prometheusClient = requireNonNull(prometheusClient, "prometheusClient is null");
     }
 
     @Override
@@ -173,6 +172,6 @@ public class PrometheusMetadata
     {
         PrometheusTableHandle tableHandle = ((PrometheusTableHandle) handle)
                 .withPredicate(constraint.getSummary());
-        return Optional.of(new ConstraintApplicationResult<>(tableHandle, constraint.getSummary()));
+        return Optional.of(new ConstraintApplicationResult<>(tableHandle, constraint.getSummary(), false));
     }
 }

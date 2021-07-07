@@ -141,7 +141,7 @@ public class BenchmarkSuite
                                         new JsonBenchmarkResultWriter(jsonOut),
                                         new JsonAvgBenchmarkResultWriter(jsonAvgOut),
                                         new SimpleLineBenchmarkResultWriter(csvOut),
-                                        new OdsBenchmarkResultWriter("presto.benchmark." + benchmark.getBenchmarkName(), odsOut))));
+                                        new OdsBenchmarkResultWriter("trino.benchmark." + benchmark.getBenchmarkName(), odsOut))));
             }
         }
     }
@@ -153,7 +153,7 @@ public class BenchmarkSuite
 
         private ForwardingBenchmarkResultWriter(List<BenchmarkResultHook> benchmarkResultHooks)
         {
-            requireNonNull(benchmarkResultHooks, "benchmarkResultWriters is null");
+            requireNonNull(benchmarkResultHooks, "benchmarkResultHooks is null");
             this.benchmarkResultHooks = ImmutableList.copyOf(benchmarkResultHooks);
         }
 

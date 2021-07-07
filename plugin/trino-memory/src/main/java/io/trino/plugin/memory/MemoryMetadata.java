@@ -35,7 +35,9 @@ import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableProperties;
 import io.trino.spi.connector.ConnectorViewDefinition;
+import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.LimitApplicationResult;
+import io.trino.spi.connector.SampleApplicationResult;
 import io.trino.spi.connector.SampleType;
 import io.trino.spi.connector.SchemaNotFoundException;
 import io.trino.spi.connector.SchemaTableName;
@@ -43,6 +45,8 @@ import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.ViewNotFoundException;
 import io.trino.spi.security.TrinoPrincipal;
 import io.trino.spi.statistics.ComputedStatistics;
+import io.trino.spi.statistics.Estimate;
+import io.trino.spi.statistics.TableStatistics;
 
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
@@ -61,13 +65,13 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static io.trino.spi.StandardErrorCode.ALREADY_EXISTS;
 import static io.trino.spi.StandardErrorCode.NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.SCHEMA_NOT_EMPTY;
 import static io.trino.spi.connector.SampleType.SYSTEM;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toMap;
 
 @ThreadSafe
 public class MemoryMetadata
@@ -174,7 +178,7 @@ public class MemoryMetadata
         MemoryTableHandle handle = (MemoryTableHandle) tableHandle;
         return tables.get(handle.getId())
                 .getColumns().stream()
-                .collect(toMap(ColumnInfo::getName, ColumnInfo::getHandle));
+                .collect(toImmutableMap(ColumnInfo::getName, ColumnInfo::getHandle));
     }
 
     @Override
@@ -191,7 +195,7 @@ public class MemoryMetadata
     {
         return tables.values().stream()
                 .filter(table -> prefix.matches(table.getSchemaTableName()))
-                .collect(toMap(TableInfo::getSchemaTableName, handle -> handle.getMetadata().getColumns()));
+                .collect(toImmutableMap(TableInfo::getSchemaTableName, handle -> handle.getMetadata().getColumns()));
     }
 
     @Override
@@ -393,6 +397,18 @@ public class MemoryMetadata
     }
 
     @Override
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint)
+    {
+        List<MemoryDataFragment> dataFragments = getDataFragments(((MemoryTableHandle) tableHandle).getId());
+        long rows = dataFragments.stream()
+                .mapToLong(MemoryDataFragment::getRows)
+                .sum();
+        return TableStatistics.builder()
+                .setRowCount(Estimate.of(rows))
+                .build();
+    }
+
+    @Override
     public Optional<LimitApplicationResult<ConnectorTableHandle>> applyLimit(ConnectorSession session, ConnectorTableHandle handle, long limit)
     {
         MemoryTableHandle table = (MemoryTableHandle) handle;
@@ -403,11 +419,12 @@ public class MemoryMetadata
 
         return Optional.of(new LimitApplicationResult<>(
                 new MemoryTableHandle(table.getId(), OptionalLong.of(limit), OptionalDouble.empty()),
+                true,
                 true));
     }
 
     @Override
-    public Optional<ConnectorTableHandle> applySample(ConnectorSession session, ConnectorTableHandle handle, SampleType sampleType, double sampleRatio)
+    public Optional<SampleApplicationResult<ConnectorTableHandle>> applySample(ConnectorSession session, ConnectorTableHandle handle, SampleType sampleType, double sampleRatio)
     {
         MemoryTableHandle table = (MemoryTableHandle) handle;
 
@@ -415,6 +432,8 @@ public class MemoryMetadata
             return Optional.empty();
         }
 
-        return Optional.of(new MemoryTableHandle(table.getId(), table.getLimit(), OptionalDouble.of(table.getSampleRatio().orElse(1) * sampleRatio)));
+        return Optional.of(new SampleApplicationResult<>(
+                new MemoryTableHandle(table.getId(), table.getLimit(), OptionalDouble.of(table.getSampleRatio().orElse(1) * sampleRatio)),
+                true));
     }
 }

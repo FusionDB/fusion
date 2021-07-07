@@ -26,9 +26,9 @@ public interface LocalMemoryContext
      * <p/>
      * Note: Canceling the returned future will complete it immediately even though the memory pools are low
      * on memory, and callers blocked on this future will proceed to allocating more memory from the exhausted
-     * pools, which will violate the protocol of Presto MemoryPool implementation.
+     * pools, which will violate the protocol of Trino MemoryPool implementation.
      */
-    ListenableFuture<?> setBytes(long bytes);
+    ListenableFuture<Void> setBytes(long bytes);
 
     /**
      * This method can return false when there is not enough memory available to satisfy a positive delta allocation

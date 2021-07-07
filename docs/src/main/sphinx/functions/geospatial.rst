@@ -159,6 +159,15 @@ Relationship tests
 Operations
 ----------
 
+.. function:: geometry_nearest_points(Geometry, Geometry) -> row(Point, Point)
+
+    Returns the points on each geometry nearest the other.  If either geometry
+    is empty, return ``NULL``.  Otherwise, return a row of two Points that have
+    the minimum distance of any two points on the geometries.  The first Point
+    will be from the first Geometry argument, the second from the second Geometry
+    argument.  If there are multiple pairs with the minimum distance, one pair
+    is chosen arbitrarily.
+
 .. function:: geometry_union(array(Geometry)) -> Geometry
 
     Returns a geometry that represents the point set union of the input geometries. Performance
@@ -406,6 +415,15 @@ Accessors
 .. function:: great_circle_distance(latitude1, longitude1, latitude2, longitude2) -> double
 
     Returns the great-circle distance between two points on Earth's surface in kilometers.
+
+.. function:: to_geojson_geometry(SphericalGeography) -> varchar
+
+    Returns the GeoJSON encoded defined by the input spherical geography.
+
+.. function:: from_geojson_geometry(varchar) -> SphericalGeography
+
+    Returns the spherical geography type object from the GeoJSON representation stripping non geometry key/values.
+    Feature and FeatureCollection are not supported.
 
 Aggregations
 ------------

@@ -56,7 +56,8 @@ public class TestFeaturesConfig
                 .setJoinReorderingStrategy(JoinReorderingStrategy.AUTOMATIC)
                 .setMaxReorderedJoins(9)
                 .setRedistributeWrites(true)
-                .setUsePreferredWritePartitioning(false)
+                .setUsePreferredWritePartitioning(true)
+                .setPreferredWritePartitioningMinNumberOfPartitions(50)
                 .setScaleWriters(false)
                 .setWriterMinSize(DataSize.of(32, MEGABYTE))
                 .setOptimizeMetadataQueries(false)
@@ -79,12 +80,14 @@ public class TestFeaturesConfig
                 .setUnwrapCasts(true)
                 .setIterativeOptimizerTimeout(new Duration(3, MINUTES))
                 .setEnableStatsCalculator(true)
+                .setStatisticsPrecalculationForPushdownEnabled(false)
                 .setCollectPlanStatisticsForAllQueries(false)
                 .setIgnoreStatsCalculatorFailures(true)
                 .setDefaultFilterFactorEnabled(false)
                 .setEnableForcedExchangeBelowGroupId(true)
                 .setExchangeCompressionEnabled(false)
                 .setExchangeDataIntegrityVerification(DataIntegrityVerification.ABORT)
+                .setLegacyRowToJsonCast(false)
                 .setEnableIntermediateAggregations(false)
                 .setPushAggregationThroughOuterJoin(true)
                 .setPushPartialAggregationThoughJoin(false)
@@ -105,7 +108,12 @@ public class TestFeaturesConfig
                 .setIgnoreDownstreamPreferences(false)
                 .setOmitDateTimeTypePrecision(false)
                 .setIterativeRuleBasedColumnPruning(true)
-                .setRewriteFilteringSemiJoinToInnerJoin(true));
+                .setRewriteFilteringSemiJoinToInnerJoin(true)
+                .setOptimizeDuplicateInsensitiveJoins(true)
+                .setUseLegacyWindowFilterPushdown(false)
+                .setUseTableScanNodePartitioning(true)
+                .setTableScanNodePartitioningMinBucketToTaskRatio(0.5)
+                .setMergeProjectWithValues(true));
     }
 
     @Test
@@ -117,6 +125,7 @@ public class TestFeaturesConfig
                 .put("network-cost-weight", "0.2")
                 .put("iterative-optimizer-timeout", "10s")
                 .put("enable-stats-calculator", "false")
+                .put("statistics-precalculation-for-pushdown.enabled", "true")
                 .put("collect-plan-statistics-for-all-queries", "true")
                 .put("optimizer.ignore-stats-calculator-failures", "false")
                 .put("optimizer.default-filter-factor-enabled", "true")
@@ -132,7 +141,8 @@ public class TestFeaturesConfig
                 .put("optimizer.join-reordering-strategy", "NONE")
                 .put("optimizer.max-reordered-joins", "5")
                 .put("redistribute-writes", "false")
-                .put("use-preferred-write-partitioning", "true")
+                .put("use-preferred-write-partitioning", "false")
+                .put("preferred-write-partitioning-min-number-of-partitions", "10")
                 .put("scale-writers", "true")
                 .put("writer-min-size", "42GB")
                 .put("optimizer.optimize-metadata-queries", "true")
@@ -157,6 +167,7 @@ public class TestFeaturesConfig
                 .put("memory-revoking-target", "0.8")
                 .put("exchange.compression-enabled", "true")
                 .put("exchange.data-integrity-verification", "RETRY")
+                .put("deprecated.legacy-row-to-json-cast", "true")
                 .put("optimizer.enable-intermediate-aggregations", "true")
                 .put("parse-decimal-literals-as-double", "true")
                 .put("optimizer.force-single-node-output", "false")
@@ -176,6 +187,11 @@ public class TestFeaturesConfig
                 .put("deprecated.omit-datetime-type-precision", "true")
                 .put("optimizer.iterative-rule-based-column-pruning", "false")
                 .put("optimizer.rewrite-filtering-semi-join-to-inner-join", "false")
+                .put("optimizer.optimize-duplicate-insensitive-joins", "false")
+                .put("optimizer.use-legacy-window-filter-pushdown", "true")
+                .put("optimizer.use-table-scan-node-partitioning", "false")
+                .put("optimizer.table-scan-node-partitioning-min-bucket-to-task-ratio", "0.0")
+                .put("optimizer.merge-project-with-values", "false")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -184,6 +200,7 @@ public class TestFeaturesConfig
                 .setNetworkCostWeight(0.2)
                 .setIterativeOptimizerTimeout(new Duration(10, SECONDS))
                 .setEnableStatsCalculator(false)
+                .setStatisticsPrecalculationForPushdownEnabled(true)
                 .setCollectPlanStatisticsForAllQueries(true)
                 .setIgnoreStatsCalculatorFailures(false)
                 .setEnableForcedExchangeBelowGroupId(false)
@@ -198,7 +215,8 @@ public class TestFeaturesConfig
                 .setJoinReorderingStrategy(NONE)
                 .setMaxReorderedJoins(5)
                 .setRedistributeWrites(false)
-                .setUsePreferredWritePartitioning(true)
+                .setUsePreferredWritePartitioning(false)
+                .setPreferredWritePartitioningMinNumberOfPartitions(10)
                 .setScaleWriters(true)
                 .setWriterMinSize(DataSize.of(42, GIGABYTE))
                 .setOptimizeMetadataQueries(true)
@@ -223,6 +241,7 @@ public class TestFeaturesConfig
                 .setMemoryRevokingTarget(0.8)
                 .setExchangeCompressionEnabled(true)
                 .setExchangeDataIntegrityVerification(DataIntegrityVerification.RETRY)
+                .setLegacyRowToJsonCast(true)
                 .setEnableIntermediateAggregations(true)
                 .setParseDecimalLiteralsAsDouble(true)
                 .setForceSingleNodeOutput(false)
@@ -242,7 +261,12 @@ public class TestFeaturesConfig
                 .setIgnoreDownstreamPreferences(true)
                 .setOmitDateTimeTypePrecision(true)
                 .setIterativeRuleBasedColumnPruning(false)
-                .setRewriteFilteringSemiJoinToInnerJoin(false);
+                .setRewriteFilteringSemiJoinToInnerJoin(false)
+                .setOptimizeDuplicateInsensitiveJoins(false)
+                .setUseLegacyWindowFilterPushdown(true)
+                .setUseTableScanNodePartitioning(false)
+                .setTableScanNodePartitioningMinBucketToTaskRatio(0.0)
+                .setMergeProjectWithValues(false);
         assertFullMapping(properties, expected);
     }
 }

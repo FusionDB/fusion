@@ -736,24 +736,24 @@ public abstract class AbstractTestAggregations
         assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP(9) WITH TIME ZONE), 0.023) FROM orders", "SELECT 2322");
 
         // test time
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME)) FROM orders", "SELECT 969");
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME), 0.023) FROM orders", "SELECT 969");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME)) FROM orders", "SELECT 1005");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME), 0.023) FROM orders", "SELECT 1005");
 
         // test time(9) (long representation)
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(9))) FROM orders", "SELECT 969");
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(9)), 0.023) FROM orders", "SELECT 969");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(9))) FROM orders", "SELECT 1005");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(9)), 0.023) FROM orders", "SELECT 1005");
 
         Session session = Session.builder(getSession())
                 .setTimeZoneKey(TimeZoneKey.getTimeZoneKey("+08:35"))
                 .build();
 
         // test time with time zone
-        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 993");
-        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 993");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 1013");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 1013");
 
         // test time(12) with time zone (long representation)
-        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(12) WITH TIME ZONE)) FROM orders", "SELECT 1000");
-        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(12) WITH TIME ZONE), 0.023) FROM orders", "SELECT 1000");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(12) WITH TIME ZONE)) FROM orders", "SELECT 969");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME(12) WITH TIME ZONE), 0.023) FROM orders", "SELECT 969");
 
         // test short decimal
         assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(18, 0))) FROM orders", "SELECT 990");
@@ -807,7 +807,7 @@ public abstract class AbstractTestAggregations
         assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(comment) FROM orders", "SELECT sum(length(comment)) FROM orders");
 
         // char
-        // Presto removes trailing whitespaces when casting to CHAR.
+        // Trino removes trailing whitespaces when casting to CHAR.
         // Hard code the expected data size since there is no easy to way to compute it in H2.
         assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(CAST(comment AS CHAR(1000))) FROM orders", "SELECT 725468");
 

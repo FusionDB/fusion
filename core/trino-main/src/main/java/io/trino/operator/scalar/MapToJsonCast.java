@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Throwables.throwIfUnchecked;
 import static io.trino.metadata.Signature.castableToTypeParameter;
 import static io.trino.operator.scalar.JsonOperators.JSON_FACTORY;
 import static io.trino.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
@@ -51,10 +50,14 @@ import static io.trino.util.Reflection.methodHandle;
 public class MapToJsonCast
         extends SqlOperator
 {
-    public static final MapToJsonCast MAP_TO_JSON = new MapToJsonCast();
+    public static final MapToJsonCast MAP_TO_JSON = new MapToJsonCast(false);
+    public static final MapToJsonCast LEGACY_MAP_TO_JSON = new MapToJsonCast(true);
+
     private static final MethodHandle METHOD_HANDLE = methodHandle(MapToJsonCast.class, "toJson", ObjectKeyProvider.class, JsonGeneratorWriter.class, Block.class);
 
-    private MapToJsonCast()
+    private final boolean legacyRowToJson;
+
+    private MapToJsonCast(boolean legacyRowToJson)
     {
         super(OperatorType.CAST,
                 ImmutableList.of(
@@ -64,6 +67,7 @@ public class MapToJsonCast
                 JSON.getTypeSignature(),
                 ImmutableList.of(mapType(new TypeSignature("K"), new TypeSignature("V"))),
                 false);
+        this.legacyRowToJson = legacyRowToJson;
     }
 
     @Override
@@ -76,7 +80,7 @@ public class MapToJsonCast
         checkCondition(canCastToJson(mapType), INVALID_CAST_ARGUMENT, "Cannot cast %s to JSON", mapType);
 
         ObjectKeyProvider provider = ObjectKeyProvider.createObjectKeyProvider(keyType);
-        JsonGeneratorWriter writer = JsonGeneratorWriter.createJsonGeneratorWriter(valueType);
+        JsonGeneratorWriter writer = JsonGeneratorWriter.createJsonGeneratorWriter(valueType, legacyRowToJson);
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(provider).bindTo(writer);
 
         return new ChoicesScalarFunctionImplementation(
@@ -108,7 +112,6 @@ public class MapToJsonCast
             return output.slice();
         }
         catch (IOException e) {
-            throwIfUnchecked(e);
             throw new RuntimeException(e);
         }
     }

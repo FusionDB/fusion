@@ -24,7 +24,7 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
-import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.connector.DynamicFilter;
 
 import javax.inject.Inject;
 
@@ -51,7 +51,7 @@ public class PinotPageSourceProvider
     {
         requireNonNull(pinotConfig, "pinotConfig is null");
         this.pinotQueryClient = requireNonNull(pinotQueryClient, "pinotQueryClient is null");
-        this.clusterInfoFetcher = requireNonNull(clusterInfoFetcher, "cluster info fetcher is null");
+        this.clusterInfoFetcher = requireNonNull(clusterInfoFetcher, "clusterInfoFetcher is null");
         this.limitForSegmentQueries = pinotConfig.getMaxRowsPerSplitForSegmentQueries();
         estimatedNonNumericColumnSize = pinotConfig.getEstimatedSizeInBytesForNonNumericColumn();
     }
@@ -63,7 +63,7 @@ public class PinotPageSourceProvider
             ConnectorSplit split,
             ConnectorTableHandle tableHandle,
             List<ColumnHandle> columns,
-            TupleDomain<ColumnHandle> dynamicFilter)
+            DynamicFilter dynamicFilter)
     {
         requireNonNull(split, "split is null");
 
@@ -103,8 +103,7 @@ public class PinotPageSourceProvider
                         pinotQuery,
                         handles,
                         clusterInfoFetcher);
-            default:
-                throw new UnsupportedOperationException("Unknown Pinot split type: " + pinotSplit.getSplitType());
         }
+        throw new UnsupportedOperationException("Unknown Pinot split type: " + pinotSplit.getSplitType());
     }
 }

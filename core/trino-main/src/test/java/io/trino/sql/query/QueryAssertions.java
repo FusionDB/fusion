@@ -13,8 +13,8 @@
  */
 package io.trino.sql.query;
 
+import com.google.common.collect.ImmutableList;
 import io.trino.Session;
-import io.trino.cost.PlanNodeStatsEstimate;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.spi.type.SqlTime;
 import io.trino.spi.type.SqlTimeWithTimeZone;
@@ -38,19 +38,26 @@ import org.assertj.core.presentation.StandardRepresentation;
 import org.intellij.lang.annotations.Language;
 
 import java.io.Closeable;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.testing.Assertions.assertEqualsIgnoreOrder;
+import static io.trino.cost.StatsCalculator.noopStatsCalculator;
 import static io.trino.sql.planner.assertions.PlanAssert.assertPlan;
 import static io.trino.sql.query.QueryAssertions.ExpressionAssert.newExpressionAssert;
 import static io.trino.sql.query.QueryAssertions.QueryAssert.newQueryAssert;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.transaction.TransactionBuilder.transaction;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
@@ -248,6 +255,8 @@ public class QueryAssertions
         private final Session session;
         private final String query;
         private boolean ordered;
+        private boolean skipTypesCheck;
+        private boolean skipResultsCorrectnessCheckForPushdown;
 
         static AssertProvider<QueryAssert> newQueryAssert(String query, QueryRunner runner, Session session)
         {
@@ -263,6 +272,25 @@ public class QueryAssertions
             this.query = requireNonNull(query, "query is null");
         }
 
+        public QueryAssert projected(int... columns)
+        {
+            return new QueryAssert(
+                    runner,
+                    session,
+                    format("%s projected with %s", query, Arrays.toString(columns)),
+                    new MaterializedResult(
+                            actual.getMaterializedRows().stream()
+                                    .map(row -> new MaterializedRow(
+                                            row.getPrecision(),
+                                            IntStream.of(columns)
+                                                    .mapToObj(row::getField)
+                                                    .collect(toList()))) // values are nullable
+                                    .collect(toImmutableList()),
+                            IntStream.of(columns)
+                                    .mapToObj(actual.getTypes()::get)
+                                    .collect(toImmutableList())));
+        }
+
         public QueryAssert matches(BiFunction<Session, QueryRunner, MaterializedResult> evaluator)
         {
             MaterializedResult expected = evaluator.apply(session, runner);
@@ -275,6 +303,18 @@ public class QueryAssertions
             return this;
         }
 
+        public QueryAssert skippingTypesCheck()
+        {
+            skipTypesCheck = true;
+            return this;
+        }
+
+        public QueryAssert skipResultsCorrectnessCheckForPushdown()
+        {
+            skipResultsCorrectnessCheckForPushdown = true;
+            return this;
+        }
+
         public QueryAssert matches(@Language("SQL") String query)
         {
             MaterializedResult expected = runner.execute(session, query);
@@ -284,7 +324,9 @@ public class QueryAssertions
         public QueryAssert matches(MaterializedResult expected)
         {
             return satisfies(actual -> {
-                assertTypes(actual, expected.getTypes());
+                if (!skipTypesCheck) {
+                    assertTypes(actual, expected.getTypes());
+                }
 
                 ListAssert<MaterializedRow> assertion = assertThat(actual.getMaterializedRows())
                         .as("Rows")
@@ -308,7 +350,9 @@ public class QueryAssertions
         public QueryAssert containsAll(MaterializedResult expected)
         {
             return satisfies(actual -> {
-                assertTypes(actual, expected.getTypes());
+                if (!skipTypesCheck) {
+                    assertTypes(actual, expected.getTypes());
+                }
 
                 assertThat(actual.getMaterializedRows())
                         .as("Rows")
@@ -352,10 +396,7 @@ public class QueryAssertions
          */
         public QueryAssert isFullyPushedDown()
         {
-            checkState(!(runner instanceof LocalQueryRunner), "testIsFullyPushedDown() currently does not work with LocalQueryRunner");
-
-            // Compare the results with pushdown disabled, so that explicit matches() call is not needed
-            verifyResultsWithPushdownDisabled();
+            checkState(!(runner instanceof LocalQueryRunner), "isFullyPushedDown() currently does not work with LocalQueryRunner");
 
             transaction(runner.getTransactionManager(), runner.getAccessControl())
                     .execute(session, session -> {
@@ -363,13 +404,17 @@ public class QueryAssertions
                         assertPlan(
                                 session,
                                 runner.getMetadata(),
-                                (node, sourceStats, lookup, ignore, types) -> PlanNodeStatsEstimate.unknown(),
+                                noopStatsCalculator(),
                                 plan,
                                 PlanMatchPattern.output(
                                         PlanMatchPattern.exchange(
                                                 PlanMatchPattern.node(TableScanNode.class))));
                     });
 
+            if (!skipResultsCorrectnessCheckForPushdown) {
+                // Compare the results with pushdown disabled, so that explicit matches() call is not needed
+                verifyResultsWithPushdownDisabled();
+            }
             return this;
         }
 
@@ -379,10 +424,26 @@ public class QueryAssertions
          * <b>Note:</b> the primary intent of this assertion is to ensure the test is updated to {@link #isFullyPushedDown()}
          * when pushdown capabilities are improved.
          */
-        public QueryAssert isNotFullyPushedDown(Class<? extends PlanNode> retainedNode)
+        @SafeVarargs
+        public final QueryAssert isNotFullyPushedDown(Class<? extends PlanNode>... retainedNodes)
         {
-            // Compare the results with pushdown disabled, so that explicit matches() call is not needed
-            verifyResultsWithPushdownDisabled();
+            checkArgument(retainedNodes.length > 0, "No retainedNodes");
+            PlanMatchPattern expectedPlan = PlanMatchPattern.node(TableScanNode.class);
+            for (Class<? extends PlanNode> retainedNode : ImmutableList.copyOf(retainedNodes).reverse()) {
+                expectedPlan = PlanMatchPattern.node(retainedNode, expectedPlan);
+            }
+            return isNotFullyPushedDown(expectedPlan);
+        }
+
+        /**
+         * Verifies query is not fully pushed down and verifies the results are the same as when the pushdown is fully disabled.
+         * <p>
+         * <b>Note:</b> the primary intent of this assertion is to ensure the test is updated to {@link #isFullyPushedDown()}
+         * when pushdown capabilities are improved.
+         */
+        public final QueryAssert isNotFullyPushedDown(PlanMatchPattern retainedSubplan)
+        {
+            PlanMatchPattern expectedPlan = PlanMatchPattern.anyTree(retainedSubplan);
 
             transaction(runner.getTransactionManager(), runner.getAccessControl())
                     .execute(session, session -> {
@@ -390,13 +451,15 @@ public class QueryAssertions
                         assertPlan(
                                 session,
                                 runner.getMetadata(),
-                                (node, sourceStats, lookup, ignore, types) -> PlanNodeStatsEstimate.unknown(),
+                                noopStatsCalculator(),
                                 plan,
-                                PlanMatchPattern.anyTree(
-                                        PlanMatchPattern.node(retainedNode,
-                                                PlanMatchPattern.node(TableScanNode.class))));
+                                expectedPlan);
                     });
 
+            if (!skipResultsCorrectnessCheckForPushdown) {
+                // Compare the results with pushdown disabled, so that explicit matches() call is not needed
+                verifyResultsWithPushdownDisabled();
+            }
             return this;
         }
 

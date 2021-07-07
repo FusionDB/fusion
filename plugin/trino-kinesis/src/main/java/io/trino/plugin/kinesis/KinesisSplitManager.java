@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.DAYS;
 
 /**
- * Split data chunk from kinesis Stream to multiple small chunks for parallelization and distribution to multiple Presto workers.
+ * Split data chunk from kinesis Stream to multiple small chunks for parallelization and distribution to multiple Trino workers.
  * By default, each shard of Kinesis Stream forms one Kinesis Split
  */
 public class KinesisSplitManager
@@ -111,6 +111,7 @@ public class KinesisSplitManager
             KinesisSplit split = new KinesisSplit(
                     kinesisTableHandle.getStreamName(),
                     kinesisTableHandle.getMessageDataFormat(),
+                    kinesisTableHandle.getCompressionCodec(),
                     shard.getShardId(),
                     shard.getSequenceNumberRange().getStartingSequenceNumber(),
                     shard.getSequenceNumberRange().getEndingSequenceNumber());

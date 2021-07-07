@@ -13,25 +13,34 @@
  */
 package io.trino.jdbc;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.net.HostAndPort;
 import io.trino.client.ClientException;
 import io.trino.client.ClientSelectedRole;
+import io.trino.client.auth.external.DesktopBrowserRedirectHandler;
+import io.trino.client.auth.external.ExternalAuthenticator;
+import io.trino.client.auth.external.HttpTokenPoller;
+import io.trino.client.auth.external.RedirectHandler;
+import io.trino.client.auth.external.TokenPoller;
 import okhttp3.OkHttpClient;
 
 import java.io.File;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static io.trino.client.KerberosUtil.defaultCredentialCachePath;
 import static io.trino.client.OkHttpUtil.basicAuth;
@@ -44,9 +53,13 @@ import static io.trino.client.OkHttpUtil.setupSsl;
 import static io.trino.client.OkHttpUtil.tokenAuth;
 import static io.trino.jdbc.ConnectionProperties.ACCESS_TOKEN;
 import static io.trino.jdbc.ConnectionProperties.APPLICATION_NAME_PREFIX;
+import static io.trino.jdbc.ConnectionProperties.ASSUME_LITERAL_NAMES_IN_METADATA_CALLS_FOR_NON_CONFORMING_CLIENTS;
 import static io.trino.jdbc.ConnectionProperties.CLIENT_INFO;
 import static io.trino.jdbc.ConnectionProperties.CLIENT_TAGS;
 import static io.trino.jdbc.ConnectionProperties.DISABLE_COMPRESSION;
+import static io.trino.jdbc.ConnectionProperties.EXTERNAL_AUTHENTICATION;
+import static io.trino.jdbc.ConnectionProperties.EXTERNAL_AUTHENTICATION_TIMEOUT;
+import static io.trino.jdbc.ConnectionProperties.EXTERNAL_AUTHENTICATION_TOKEN_CACHE;
 import static io.trino.jdbc.ConnectionProperties.EXTRA_CREDENTIALS;
 import static io.trino.jdbc.ConnectionProperties.HTTP_PROXY;
 import static io.trino.jdbc.ConnectionProperties.KERBEROS_CONFIG_PATH;
@@ -59,6 +72,7 @@ import static io.trino.jdbc.ConnectionProperties.KERBEROS_USE_CANONICAL_HOSTNAME
 import static io.trino.jdbc.ConnectionProperties.PASSWORD;
 import static io.trino.jdbc.ConnectionProperties.ROLES;
 import static io.trino.jdbc.ConnectionProperties.SESSION_PROPERTIES;
+import static io.trino.jdbc.ConnectionProperties.SESSION_USER;
 import static io.trino.jdbc.ConnectionProperties.SOCKS_PROXY;
 import static io.trino.jdbc.ConnectionProperties.SOURCE;
 import static io.trino.jdbc.ConnectionProperties.SSL;
@@ -85,10 +99,10 @@ public final class TrinoDriverUri
 {
     private static final String JDBC_URL_PREFIX = "jdbc:";
     private static final String JDBC_URL_START = JDBC_URL_PREFIX + "trino:";
-    private static final String LEGACY_JDBC_URL_START = JDBC_URL_PREFIX + "presto:";
 
     private static final Splitter QUERY_SPLITTER = Splitter.on('&').omitEmptyStrings();
     private static final Splitter ARG_SPLITTER = Splitter.on('=').limit(2);
+    private static final AtomicReference<RedirectHandler> REDIRECT_HANDLER = new AtomicReference<>(new DesktopBrowserRedirectHandler());
 
     private final HostAndPort address;
     private final URI uri;
@@ -124,12 +138,12 @@ public final class TrinoDriverUri
     public static TrinoDriverUri create(String url, Properties properties)
             throws SQLException
     {
-        return new TrinoDriverUri(url, properties);
+        return new TrinoDriverUri(url, firstNonNull(properties, new Properties()));
     }
 
     public static boolean acceptsURL(String url)
     {
-        return url.startsWith(JDBC_URL_START) || url.startsWith(LEGACY_JDBC_URL_START);
+        return url.startsWith(JDBC_URL_START);
     }
 
     public URI getJdbcUri()
@@ -156,6 +170,12 @@ public final class TrinoDriverUri
             throws SQLException
     {
         return USER.getRequiredValue(properties);
+    }
+
+    public Optional<String> getSessionUser()
+            throws SQLException
+    {
+        return SESSION_USER.getValue(properties);
     }
 
     public Map<String, ClientSelectedRole> getRoles()
@@ -215,6 +235,12 @@ public final class TrinoDriverUri
             throws SQLException
     {
         return DISABLE_COMPRESSION.getValue(properties).orElse(false);
+    }
+
+    public boolean isAssumeLiteralNamesInMetadataCallsForNonConformingClients()
+            throws SQLException
+    {
+        return ASSUME_LITERAL_NAMES_IN_METADATA_CALLS_FOR_NON_CONFORMING_CLIENTS.getValue(properties).orElse(false);
     }
 
     public void setupClient(OkHttpClient.Builder builder)
@@ -278,6 +304,26 @@ public final class TrinoDriverUri
                 }
                 builder.addInterceptor(tokenAuth(ACCESS_TOKEN.getValue(properties).get()));
             }
+
+            if (EXTERNAL_AUTHENTICATION.getValue(properties).orElse(false)) {
+                if (!useSecureConnection) {
+                    throw new SQLException("Authentication using external authorization requires SSL to be enabled");
+                }
+
+                // create HTTP client that shares the same settings, but without the external authenticator
+                TokenPoller poller = new HttpTokenPoller(builder.build());
+
+                Duration timeout = EXTERNAL_AUTHENTICATION_TIMEOUT.getValue(properties)
+                        .map(value -> Duration.ofMillis(value.toMillis()))
+                        .orElse(Duration.ofMinutes(2));
+
+                KnownTokenCache knownTokenCache = EXTERNAL_AUTHENTICATION_TOKEN_CACHE.getValue(properties).get();
+
+                ExternalAuthenticator authenticator = new ExternalAuthenticator(REDIRECT_HANDLER.get(), poller, knownTokenCache.create(), timeout);
+
+                builder.authenticator(authenticator);
+                builder.addInterceptor(authenticator);
+            }
         }
         catch (ClientException e) {
             throw new SQLException(e.getMessage(), e);
@@ -311,11 +357,11 @@ public final class TrinoDriverUri
     private static URI parseDriverUrl(String url)
             throws SQLException
     {
-        if (!url.startsWith(JDBC_URL_START) && !url.startsWith(LEGACY_JDBC_URL_START)) {
+        if (!url.startsWith(JDBC_URL_START)) {
             throw new SQLException("Invalid JDBC URL: " + url);
         }
 
-        if (url.equals(JDBC_URL_START) || url.equals(LEGACY_JDBC_URL_START)) {
+        if (url.equals(JDBC_URL_START)) {
             throw new SQLException("Empty JDBC URL: " + url);
         }
 
@@ -428,5 +474,11 @@ public final class TrinoDriverUri
         for (ConnectionProperty<?> property : ConnectionProperties.allProperties()) {
             property.validate(connectionProperties);
         }
+    }
+
+    @VisibleForTesting
+    static void setRedirectHandler(RedirectHandler handler)
+    {
+        REDIRECT_HANDLER.set(requireNonNull(handler, "handler is null"));
     }
 }

@@ -20,6 +20,7 @@ import com.google.common.primitives.Ints;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.trino.operator.scalar.AbstractTestFunctions;
+import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
 import io.trino.spi.function.LiteralParameters;
 import io.trino.spi.function.ScalarFunction;
@@ -76,8 +77,8 @@ import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.fail;
 
 public class TestArrayOperators
         extends AbstractTestFunctions
@@ -216,7 +217,7 @@ public class TestArrayOperators
         assertFunction(
                 "cast(ARRAY[ROW(1, 2), ROW(3, CAST(null as INTEGER)), CAST(ROW(null, null) AS ROW(INTEGER, INTEGER)), null] AS JSON)",
                 JSON,
-                "[[1,2],[3,null],[null,null],null]");
+                "[{\"\":1,\"\":2},{\"\":3,\"\":null},{\"\":null,\"\":null},null]");
         assertFunction("CAST(ARRAY [12345.12345, 12345.12345, 3.0] AS JSON)", JSON, "[12345.12345,12345.12345,3.00000]");
         assertFunction(
                 "CAST(ARRAY [123456789012345678901234567890.87654321, 123456789012345678901234567890.12345678] AS JSON)",
@@ -435,13 +436,9 @@ public class TestArrayOperators
         // This query is ambiguous. The result can be [[1], NULL] or [[1], [NULL]] depending on interpretation
         assertInvalidFunction("ARRAY [ARRAY [1]] || ARRAY [NULL]", AMBIGUOUS_FUNCTION_CALL);
 
-        try {
-            assertFunction("ARRAY [ARRAY [1]] || ARRAY [ARRAY ['x']]", new ArrayType(new ArrayType(INTEGER)), null);
-            fail("arrays must be of the same type");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
+        assertThatThrownBy(() -> assertFunction("ARRAY [ARRAY [1]] || ARRAY [ARRAY ['x']]", new ArrayType(new ArrayType(INTEGER)), null))
+                .isInstanceOf(TrinoException.class)
+                .hasMessage("line 1:19: Unexpected parameters (array(array(integer)), array(array(varchar(1)))) for function concat. Expected: concat(char(x), char(y)) , concat(array(E), E) E, concat(E, array(E)) E, concat(array(E)) E, concat(varchar) , concat(varbinary) ");
 
         assertCachedInstanceHasBoundedRetainedSize("ARRAY [1, NULL] || ARRAY [3]");
     }
@@ -477,13 +474,9 @@ public class TestArrayOperators
                 new ArrayType(createDecimalType(18, 3)),
                 asList(decimal("000000000000001.000"), decimal("000000000000002.000"), decimal("123456789123456.789")));
 
-        try {
-            assertFunction("ARRAY [ARRAY[1]] || ARRAY ['x']", new ArrayType(new ArrayType(INTEGER)), null);
-            fail("arrays must be of the same type");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
+        assertThatThrownBy(() -> assertFunction("ARRAY [ARRAY[1]] || ARRAY ['x']", new ArrayType(new ArrayType(INTEGER)), null))
+                .isInstanceOf(TrinoException.class)
+                .hasMessage("line 1:18: Unexpected parameters (array(array(integer)), array(varchar(1))) for function concat. Expected: concat(char(x), char(y)) , concat(array(E), E) E, concat(E, array(E)) E, concat(array(E)) E, concat(varchar) , concat(varbinary) ");
 
         assertCachedInstanceHasBoundedRetainedSize("ARRAY [1, NULL] || 3");
         assertCachedInstanceHasBoundedRetainedSize("3 || ARRAY [1, NULL]");

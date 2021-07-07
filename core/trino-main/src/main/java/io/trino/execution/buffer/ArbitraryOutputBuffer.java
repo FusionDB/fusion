@@ -201,7 +201,7 @@ public class ArbitraryOutputBuffer
     }
 
     @Override
-    public ListenableFuture<?> isFull()
+    public ListenableFuture<Void> isFull()
     {
         return memoryManager.getBufferBlockedFuture();
     }
@@ -210,7 +210,7 @@ public class ArbitraryOutputBuffer
     public void enqueue(List<SerializedPage> pages)
     {
         checkState(!Thread.holdsLock(this), "Cannot enqueue pages while holding a lock on this");
-        requireNonNull(pages, "page is null");
+        requireNonNull(pages, "pages is null");
 
         // ignore pages after "no more pages" is set
         // this can happen with a limit query

@@ -13,13 +13,16 @@
  */
 package io.trino.server.security.oauth2;
 
+import com.github.scribejava.apis.openid.OpenIdJsonTokenExtractor;
+import com.github.scribejava.apis.openid.OpenIdOAuth2AccessToken;
 import com.github.scribejava.core.builder.api.DefaultApi20;
+import com.github.scribejava.core.extractors.TokenExtractor;
 import com.github.scribejava.core.model.OAuth2AccessToken;
-import com.github.scribejava.core.model.OAuthConstants;
 import com.github.scribejava.core.model.OAuthRequest;
 import com.github.scribejava.core.oauth.AccessTokenRequestParams;
 import com.github.scribejava.core.oauth.OAuth20Service;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.http.client.HttpClient;
 
 import javax.inject.Inject;
 
@@ -27,55 +30,65 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.Optional;
 
+import static io.trino.server.security.oauth2.OAuth2Service.NONCE;
+import static io.trino.server.security.oauth2.OAuth2Service.REDIRECT_URI;
+import static io.trino.server.security.oauth2.OAuth2Service.STATE;
 import static java.util.Objects.requireNonNull;
 
 public class ScribeJavaOAuth2Client
         implements OAuth2Client
 {
     private final DynamicCallbackOAuth2Service service;
+    private final Optional<String> audience;
 
     @Inject
-    public ScribeJavaOAuth2Client(OAuth2Config config)
+    public ScribeJavaOAuth2Client(OAuth2Config config, @ForOAuth2 HttpClient httpClient)
     {
-        service = new DynamicCallbackOAuth2Service(config);
+        requireNonNull(config, "config is null");
+        requireNonNull(httpClient, "httpClient is null");
+        service = new DynamicCallbackOAuth2Service(config, httpClient);
+        audience = config.getAudience();
     }
 
     @Override
-    public URI getAuthorizationUri(String state, URI callbackUri)
+    public URI getAuthorizationUri(String state, URI callbackUri, Optional<String> nonceHash)
     {
-        return URI.create(service.getAuthorizationUrl(ImmutableMap.<String, String>builder()
-                .put(OAuthConstants.REDIRECT_URI, callbackUri.toString())
-                .put(OAuthConstants.STATE, state)
-                .build()));
+        ImmutableMap.Builder<String, String> parameters = ImmutableMap.builder();
+        parameters.put(REDIRECT_URI, callbackUri.toString());
+        parameters.put(STATE, state);
+        audience.ifPresent(audience -> parameters.put("audience", audience));
+        nonceHash.ifPresent(n -> parameters.put(NONCE, n));
+        return URI.create(service.getAuthorizationUrl(parameters.build()));
     }
 
     @Override
     public AccessToken getAccessToken(String code, URI callbackUri)
             throws ChallengeFailedException
     {
-        OAuth2AccessToken accessToken = service.getAccessToken(code, callbackUri.toString());
+        OpenIdOAuth2AccessToken accessToken = (OpenIdOAuth2AccessToken) service.getAccessToken(code, callbackUri.toString());
         Optional<Instant> validUntil = Optional.ofNullable(accessToken.getExpiresIn()).map(expiresSeconds -> Instant.now().plusSeconds(expiresSeconds));
-        return new AccessToken(accessToken.getAccessToken(), validUntil);
+        Optional<String> idToken = Optional.ofNullable(accessToken.getOpenIdToken());
+        return new AccessToken(accessToken.getAccessToken(), validUntil, idToken);
     }
 
     // Callback URI must be relative to client's view of the server.
     // For example, the client may be accessing the server through an HTTP proxy.
-    private static class DynamicCallbackOAuth2Service
+    static class DynamicCallbackOAuth2Service
             extends OAuth20Service
     {
-        public DynamicCallbackOAuth2Service(OAuth2Config config)
+        public DynamicCallbackOAuth2Service(OAuth2Config config, HttpClient httpClient)
         {
             super(
                     new OAuth2Api(config.getTokenUrl(), config.getAuthUrl()),
                     config.getClientId(),
                     config.getClientSecret(),
                     null,
-                    "openid",
+                    String.join(" ", config.getScopes()),
                     "code",
                     null,
                     null,
                     null,
-                    null);
+                    new ScribeHttpClient(httpClient));
         }
 
         public OAuth2AccessToken getAccessToken(String code, String callbackUrl)
@@ -83,7 +96,7 @@ public class ScribeJavaOAuth2Client
         {
             try {
                 OAuthRequest request = createAccessTokenRequest(AccessTokenRequestParams.create(code));
-                request.addParameter(OAuthConstants.REDIRECT_URI, callbackUrl);
+                request.addParameter(REDIRECT_URI, callbackUrl);
                 return sendAccessTokenRequestSync(request);
             }
             catch (InterruptedException e) {
@@ -117,6 +130,12 @@ public class ScribeJavaOAuth2Client
             protected String getAuthorizationBaseUrl()
             {
                 return authorizationBaseUrl;
+            }
+
+            @Override
+            public TokenExtractor<OAuth2AccessToken> getAccessTokenExtractor()
+            {
+                return OpenIdJsonTokenExtractor.instance();
             }
         }
     }

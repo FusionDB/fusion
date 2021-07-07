@@ -50,9 +50,12 @@ public class TestPrometheusIntegrationMetrics
 
     @BeforeClass
     protected void createQueryRunner()
+            throws Exception
     {
         this.server = new PrometheusServer();
         this.client = createPrometheusClient(server);
+
+        PrometheusServer.checkServerReady(this.client);
     }
 
     @AfterClass(alwaysRun = true)
@@ -63,13 +66,11 @@ public class TestPrometheusIntegrationMetrics
 
     @Test
     public void testRetrieveUpValue()
-            throws Exception
     {
-        PrometheusServer.checkServerReady(this.client);
         assertTrue(client.getTableNames("default").contains("up"), "Prometheus' own `up` metric should be available in default");
     }
 
-    @Test(dependsOnMethods = "testRetrieveUpValue")
+    @Test
     public void testHandleErrorResponse()
     {
         assertThatThrownBy(() -> client.getTableNames("unknown"))
@@ -79,14 +80,14 @@ public class TestPrometheusIntegrationMetrics
         assertNull(table);
     }
 
-    @Test(dependsOnMethods = "testRetrieveUpValue")
+    @Test
     public void testListSchemaNames()
     {
         PrometheusMetadata metadata = new PrometheusMetadata(client);
         assertEquals(metadata.listSchemaNames(SESSION), ImmutableSet.of("default"));
     }
 
-    @Test(dependsOnMethods = "testRetrieveUpValue")
+    @Test
     public void testGetColumnMetadata()
     {
         PrometheusMetadata metadata = new PrometheusMetadata(client);
@@ -96,11 +97,11 @@ public class TestPrometheusIntegrationMetrics
         // prometheus connector assumes that the table handle and column handle are
         // properly formed, so it will return a metadata object for any
         // PrometheusTableHandle and PrometheusColumnHandle passed in.  This is on because
-        // it is not possible for the Presto Metadata system to create the handles
+        // it is not possible for the Trino Metadata system to create the handles
         // directly.
     }
 
-    @Test(expectedExceptions = TrinoException.class, dependsOnMethods = "testRetrieveUpValue")
+    @Test(expectedExceptions = TrinoException.class)
     public void testCreateTable()
     {
         PrometheusMetadata metadata = new PrometheusMetadata(client);
@@ -112,14 +113,14 @@ public class TestPrometheusIntegrationMetrics
                 false);
     }
 
-    @Test(expectedExceptions = TrinoException.class, dependsOnMethods = "testRetrieveUpValue")
+    @Test(expectedExceptions = TrinoException.class)
     public void testDropTableTable()
     {
         PrometheusMetadata metadata = new PrometheusMetadata(client);
         metadata.dropTable(SESSION, RUNTIME_DETERMINED_TABLE_HANDLE);
     }
 
-    @Test(dependsOnMethods = "testRetrieveUpValue")
+    @Test
     public void testGetColumnTypes()
     {
         URI dataUri = server.getUri();

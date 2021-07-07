@@ -140,7 +140,7 @@ public class PrometheusRecordCursor
         Type type = getType(field);
         if (type.equals(TIMESTAMP_COLUMN_TYPE)) {
             Instant dateTime = (Instant) requireNonNull(getFieldValue(field));
-            // render with the fixed offset of the Presto server
+            // render with the fixed offset of the Trino server
             int offsetMinutes = dateTime.atZone(ZoneId.systemDefault()).getOffset().getTotalSeconds() / 60;
             return packDateTimeWithZone(dateTime.toEpochMilli(), offsetMinutes);
         }
@@ -173,10 +173,7 @@ public class PrometheusRecordCursor
     public boolean isNull(int field)
     {
         checkArgument(field < columnHandles.size(), "Invalid field index");
-        if (getFieldValue(field) == null) {
-            return true;
-        }
-        return false;
+        return getFieldValue(field) == null;
     }
 
     private void checkFieldType(int field, Type expected)

@@ -15,6 +15,7 @@ package io.trino.execution;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
+import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.security.AccessControl;
 import io.trino.spi.TrinoException;
@@ -26,7 +27,7 @@ import io.trino.transaction.TransactionManager;
 import java.util.List;
 import java.util.Optional;
 
-import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.trino.metadata.MetadataUtil.createCatalogSchemaName;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.SCHEMA_NOT_FOUND;
@@ -48,7 +49,14 @@ public class DropSchemaTask
     }
 
     @Override
-    public ListenableFuture<?> execute(DropSchema statement, TransactionManager transactionManager, Metadata metadata, AccessControl accessControl, QueryStateMachine stateMachine, List<Expression> parameters)
+    public ListenableFuture<Void> execute(
+            DropSchema statement,
+            TransactionManager transactionManager,
+            Metadata metadata,
+            AccessControl accessControl,
+            QueryStateMachine stateMachine,
+            List<Expression> parameters,
+            WarningCollector warningCollector)
     {
         if (statement.isCascade()) {
             throw new TrinoException(NOT_SUPPORTED, "CASCADE is not yet supported for DROP SCHEMA");
@@ -61,13 +69,13 @@ public class DropSchemaTask
             if (!statement.isExists()) {
                 throw semanticException(SCHEMA_NOT_FOUND, statement, "Schema '%s' does not exist", schema);
             }
-            return immediateFuture(null);
+            return immediateVoidFuture();
         }
 
         accessControl.checkCanDropSchema(session.toSecurityContext(), schema);
 
         metadata.dropSchema(session, schema);
 
-        return immediateFuture(null);
+        return immediateVoidFuture();
     }
 }

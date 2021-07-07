@@ -100,7 +100,7 @@ public class KuduMetadata
     @Override
     public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        requireNonNull(prefix, "SchemaTablePrefix is null");
+        requireNonNull(prefix, "prefix is null");
 
         List<SchemaTableName> tables;
         if (prefix.getTable().isEmpty()) {
@@ -208,51 +208,16 @@ public class KuduMetadata
         try {
             KuduTable table = clientSession.openTable(schemaTableName);
             OptionalInt bucketCount = OptionalInt.empty();
-            if (isKuduGroupedExecutionEnabled(session)) {
-                bucketCount = getTableBucketCount(table);
+            List<HashBucketSchema> bucketSchemas = table.getPartitionSchema().getHashBucketSchemas();
+            if (!bucketSchemas.isEmpty()) {
+                bucketCount = OptionalInt.of(bucketSchemas.stream()
+                        .mapToInt(HashBucketSchema::getNumBuckets)
+                        .reduce(1, Math::multiplyExact));
             }
             return new KuduTableHandle(schemaTableName, table, TupleDomain.all(), Optional.empty(), false, bucketCount, OptionalLong.empty());
         }
         catch (NotFoundException e) {
             return null;
-        }
-    }
-
-    private OptionalInt getTableBucketCount(KuduTable table)
-    {
-        int rangePartitionCount = getRangePartitions(table).size();
-        return OptionalInt.of(getHashPartitionCount(table) * (rangePartitionCount == 0 ? 1 : rangePartitionCount));
-    }
-
-    private int getHashPartitionCount(KuduTable table)
-    {
-        int hashBucketCount = 1;
-        List<HashBucketSchema> bucketSchemas = table.getPartitionSchema().getHashBucketSchemas();
-        if (bucketSchemas != null && !bucketSchemas.isEmpty()) {
-            hashBucketCount = bucketSchemas.stream()
-                    .mapToInt(HashBucketSchema::getNumBuckets)
-                    .reduce(1, Math::multiplyExact);
-        }
-        return hashBucketCount;
-    }
-
-    private Optional<List<KuduRangePartition>> getKuduRangePartitions(KuduTable table)
-    {
-        List<Partition> rangePartitions = getRangePartitions(table);
-        List<KuduRangePartition> kuduRangePartitions = rangePartitions.stream().map(partition ->
-                new KuduRangePartition(partition.getRangeKeyStart(), partition.getRangeKeyEnd())
-        ).collect(Collectors.toList());
-        return kuduRangePartitions.isEmpty() ? Optional.empty() : Optional.of(kuduRangePartitions);
-    }
-
-    private List<Partition> getRangePartitions(KuduTable table)
-    {
-        final long fetchTabletsTimeoutInMillis = 60 * 1000;
-        try {
-            return table.getRangePartitions(fetchTabletsTimeoutInMillis);
-        }
-        catch (Exception e) {
-            throw new TrinoException(GENERIC_INTERNAL_ERROR, "Unable to get list of tablets for table " + table.getName(), e);
         }
     }
 
@@ -409,7 +374,7 @@ public class KuduMetadata
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         return KuduColumnHandle.ROW_ID_HANDLE;
     }
@@ -455,17 +420,17 @@ public class KuduMetadata
             List<ColumnHandle> bucketColumns = getSpecifyColumns(kuduTable.getSchema(), bucketColumnIds, columnMap);
             Optional<List<KuduRangePartition>> kuduRangePartitions = getKuduRangePartitions(kuduTable);
             tablePartitioning = Optional.of(new ConnectorTablePartitioning(
-                new KuduPartitioningHandle(
-                    handle.getSchemaTableName().getSchemaName(),
-                    handle.getSchemaTableName().getTableName(),
-                    handle.getBucketCount().orElse(0),
-                    bucketColumnIds,
-                    bucketColumns.stream()
-                            .map(KuduColumnHandle.class::cast)
-                            .map(KuduColumnHandle::getType)
-                            .collect(Collectors.toList()),
-                    kuduRangePartitions),
-                bucketColumns));
+                    new KuduPartitioningHandle(
+                            handle.getSchemaTableName().getSchemaName(),
+                            handle.getSchemaTableName().getTableName(),
+                            handle.getBucketCount().orElse(0),
+                            bucketColumnIds,
+                            bucketColumns.stream()
+                                    .map(KuduColumnHandle.class::cast)
+                                    .map(KuduColumnHandle::getType)
+                                    .collect(Collectors.toList()),
+                            kuduRangePartitions),
+                    bucketColumns));
             partitioningColumns = Optional.of(ImmutableSet.copyOf(bucketColumns));
         }
 
@@ -480,10 +445,10 @@ public class KuduMetadata
     private List<ColumnHandle> getSpecifyColumns(Schema schema, List<Integer> targetColumns, Map<String, ColumnHandle> columnMap)
     {
         return targetColumns.stream()
-            .map(schema::getColumnByIndex)
-            .map(ColumnSchema::getName)
-            .map(columnMap::get)
-            .collect(toImmutableList());
+                .map(schema::getColumnByIndex)
+                .map(ColumnSchema::getName)
+                .map(columnMap::get)
+                .collect(toImmutableList());
     }
 
     private List<Integer> getBucketColumnIds(KuduTable kuduTable)
@@ -515,7 +480,7 @@ public class KuduMetadata
                 handle.getBucketCount(),
                 handle.getLimit());
 
-        return Optional.of(new ConstraintApplicationResult<>(handle, constraint.getSummary()));
+        return Optional.of(new ConstraintApplicationResult<>(handle, constraint.getSummary(), false));
     }
 
     /**
@@ -573,7 +538,7 @@ public class KuduMetadata
                 handle.getBucketCount(),
                 handle.getLimit());
 
-        return Optional.of(new ProjectionApplicationResult<>(handle, projections, assignmentList.build()));
+        return Optional.of(new ProjectionApplicationResult<>(handle, projections, assignmentList.build(), false));
     }
 
     @Override
@@ -594,6 +559,26 @@ public class KuduMetadata
                 handle.getBucketCount(),
                 OptionalLong.of(limit));
 
-        return Optional.of(new LimitApplicationResult<>(handle, false));
+        return Optional.of(new LimitApplicationResult<>(handle, false, false));
+    }
+
+    private static Optional<List<KuduRangePartition>> getKuduRangePartitions(KuduTable table)
+    {
+        List<Partition> rangePartitions = getRangePartitions(table);
+        List<KuduRangePartition> kuduRangePartitions = rangePartitions.stream()
+                .map(partition -> new KuduRangePartition(partition.getRangeKeyStart(), partition.getRangeKeyEnd()))
+                .collect(toImmutableList());
+        return kuduRangePartitions.isEmpty() ? Optional.empty() : Optional.of(kuduRangePartitions);
+    }
+
+    private static List<Partition> getRangePartitions(KuduTable table)
+    {
+        final long fetchTabletsTimeoutInMillis = 60 * 1000;
+        try {
+            return table.getRangePartitions(fetchTabletsTimeoutInMillis);
+        }
+        catch (Exception e) {
+            throw new TrinoException(GENERIC_INTERNAL_ERROR, "Unable to get list of tablets for table " + table.getName(), e);
+        }
     }
 }

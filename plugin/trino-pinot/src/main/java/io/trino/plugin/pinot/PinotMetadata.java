@@ -37,11 +37,14 @@ import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.TableNotFoundException;
+import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.type.ArrayType;
 import org.apache.pinot.spi.data.Schema;
 
 import javax.inject.Inject;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -226,7 +229,7 @@ public class PinotMetadata
         }
         Optional<DynamicTable> dynamicTable = handle.getQuery();
         if (dynamicTable.isPresent() &&
-                (!dynamicTable.get().getLimit().isPresent() || dynamicTable.get().getLimit().getAsLong() > limit)) {
+                (dynamicTable.get().getLimit().isEmpty() || dynamicTable.get().getLimit().getAsLong() > limit)) {
             dynamicTable = Optional.of(new DynamicTable(dynamicTable.get().getTableName(),
                     dynamicTable.get().getSuffix(),
                     dynamicTable.get().getSelections(),
@@ -245,7 +248,8 @@ public class PinotMetadata
                 handle.getConstraint(),
                 OptionalLong.of(limit),
                 dynamicTable);
-        return Optional.of(new LimitApplicationResult<>(handle, false));
+        boolean singleSplit = dynamicTable.isPresent();
+        return Optional.of(new LimitApplicationResult<>(handle, singleSplit, false));
     }
 
     @Override
@@ -253,7 +257,30 @@ public class PinotMetadata
     {
         PinotTableHandle handle = (PinotTableHandle) table;
         TupleDomain<ColumnHandle> oldDomain = handle.getConstraint();
+
         TupleDomain<ColumnHandle> newDomain = oldDomain.intersect(constraint.getSummary());
+        TupleDomain<ColumnHandle> remainingFilter;
+        if (newDomain.isNone()) {
+            remainingFilter = TupleDomain.all();
+        }
+        else {
+            Map<ColumnHandle, Domain> domains = newDomain.getDomains().orElseThrow();
+
+            Map<ColumnHandle, Domain> supported = new HashMap<>();
+            Map<ColumnHandle, Domain> unsupported = new HashMap<>();
+            for (Map.Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
+                // Pinot does not support array literals
+                if (((PinotColumnHandle) entry.getKey()).getDataType() instanceof ArrayType) {
+                    unsupported.put(entry.getKey(), entry.getValue());
+                }
+                else {
+                    supported.put(entry.getKey(), entry.getValue());
+                }
+            }
+            newDomain = TupleDomain.withColumnDomains(supported);
+            remainingFilter = TupleDomain.withColumnDomains(unsupported);
+        }
+
         if (oldDomain.equals(newDomain)) {
             return Optional.empty();
         }
@@ -264,7 +291,7 @@ public class PinotMetadata
                 newDomain,
                 handle.getLimit(),
                 handle.getQuery());
-        return Optional.of(new ConstraintApplicationResult<>(handle, constraint.getSummary()));
+        return Optional.of(new ConstraintApplicationResult<>(handle, remainingFilter, false));
     }
 
     @Override
@@ -276,7 +303,7 @@ public class PinotMetadata
     @VisibleForTesting
     public List<PinotColumn> getPinotColumns(String tableName)
     {
-        String pinotTableName = getPinotTableNameFromPrestoTableName(tableName);
+        String pinotTableName = getPinotTableNameFromTrinoTableName(tableName);
         return getFromCache(pinotTableColumnCache, pinotTableName);
     }
 
@@ -299,18 +326,18 @@ public class PinotMetadata
         }
     }
 
-    private String getPinotTableNameFromPrestoTableName(String prestoTableName)
+    private String getPinotTableNameFromTrinoTableName(String trinoTableName)
     {
         List<String> allTables = getPinotTableNames();
         String pinotTableName = null;
         for (String candidate : allTables) {
-            if (prestoTableName.equalsIgnoreCase(candidate)) {
+            if (trinoTableName.equalsIgnoreCase(candidate)) {
                 pinotTableName = candidate;
                 break;
             }
         }
         if (pinotTableName == null) {
-            throw new TableNotFoundException(new SchemaTableName(SCHEMA_NAME, prestoTableName));
+            throw new TableNotFoundException(new SchemaTableName(SCHEMA_NAME, trinoTableName));
         }
         return pinotTableName;
     }
@@ -387,7 +414,7 @@ public class PinotMetadata
 
     private List<SchemaTableName> listTables(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        if (!prefix.getSchema().isPresent() || !prefix.getTable().isPresent()) {
+        if (prefix.getSchema().isEmpty() || prefix.getTable().isEmpty()) {
             return listTables(session, Optional.empty());
         }
         return ImmutableList.of(new SchemaTableName(prefix.getSchema().get(), prefix.getTable().get()));

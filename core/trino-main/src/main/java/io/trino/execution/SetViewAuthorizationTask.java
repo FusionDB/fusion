@@ -16,6 +16,7 @@ package io.trino.execution;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
 import io.trino.connector.CatalogName;
+import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.security.AccessControl;
@@ -28,7 +29,7 @@ import io.trino.transaction.TransactionManager;
 
 import java.util.List;
 
-import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.trino.metadata.MetadataUtil.createPrincipal;
 import static io.trino.metadata.MetadataUtil.createQualifiedObjectName;
 import static io.trino.spi.StandardErrorCode.NOT_FOUND;
@@ -46,14 +47,22 @@ public class SetViewAuthorizationTask
     }
 
     @Override
-    public ListenableFuture<?> execute(SetViewAuthorization statement, TransactionManager transactionManager, Metadata metadata, AccessControl accessControl, QueryStateMachine stateMachine, List<Expression> parameters)
+    public ListenableFuture<Void> execute(
+            SetViewAuthorization statement,
+            TransactionManager transactionManager,
+            Metadata metadata,
+            AccessControl accessControl,
+            QueryStateMachine stateMachine,
+            List<Expression> parameters,
+            WarningCollector warningCollector)
     {
         Session session = stateMachine.getSession();
         QualifiedObjectName viewName = createQualifiedObjectName(session, statement, statement.getSource());
         CatalogName catalogName = metadata.getCatalogHandle(session, viewName.getCatalogName())
                 .orElseThrow(() -> new TrinoException(NOT_FOUND, "Catalog does not exist: " + viewName.getCatalogName()));
-        metadata.getView(session, viewName)
-                .orElseThrow(() -> semanticException(TABLE_NOT_FOUND, statement, "View '%s' does not exist", viewName));
+        if (metadata.getView(session, viewName).isEmpty()) {
+            throw semanticException(TABLE_NOT_FOUND, statement, "View '%s' does not exist", viewName);
+        }
 
         TrinoPrincipal principal = createPrincipal(statement.getPrincipal());
         if (principal.getType() == PrincipalType.ROLE
@@ -65,6 +74,6 @@ public class SetViewAuthorizationTask
 
         metadata.setViewAuthorization(session, viewName.asCatalogSchemaTableName(), principal);
 
-        return immediateFuture(null);
+        return immediateVoidFuture();
     }
 }

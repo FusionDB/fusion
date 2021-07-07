@@ -29,7 +29,6 @@ import io.trino.plugin.hive.parquet.ParquetPageSourceFactory;
 import io.trino.plugin.hive.parquet.ParquetReaderConfig;
 import io.trino.plugin.hive.parquet.ParquetWriterConfig;
 import io.trino.plugin.hive.rcfile.RcFilePageSourceFactory;
-import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.RecordCursor;
@@ -87,6 +86,7 @@ import static io.trino.plugin.hive.HiveTestUtils.getHiveSession;
 import static io.trino.plugin.hive.HiveTestUtils.getTypes;
 import static io.trino.plugin.hive.acid.AcidTransaction.NO_ACID_TRANSACTION;
 import static io.trino.testing.StructuralTestUtil.rowBlockOf;
+import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExceptionThrownBy;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -99,7 +99,6 @@ import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 public class TestHiveFileFormats
         extends AbstractTestHiveFileFormats
@@ -234,7 +233,7 @@ public class TestHiveFileFormats
             throws Exception
     {
         List<TestColumn> testColumns = TEST_COLUMNS.stream()
-                // t_map_null_key_* must be disabled because Presto cannot produce maps with null keys so the writer will throw
+                // t_map_null_key_* must be disabled because Trino cannot produce maps with null keys so the writer will throw
                 .filter(TestHiveFileFormats::withoutNullMapKeyTests)
                 .collect(toImmutableList());
 
@@ -270,7 +269,7 @@ public class TestHiveFileFormats
         List<TestColumn> testColumns = TEST_COLUMNS.stream()
                 // RCBinary interprets empty VARCHAR as nulls
                 .filter(testColumn -> !testColumn.getName().equals("t_empty_varchar"))
-                // t_map_null_key_* must be disabled because Presto cannot produce maps with null keys so the writer will throw
+                // t_map_null_key_* must be disabled because Trino cannot produce maps with null keys so the writer will throw
                 .filter(TestHiveFileFormats::withoutNullMapKeyTests)
                 .collect(toList());
 
@@ -314,7 +313,7 @@ public class TestHiveFileFormats
                 .setPropertyMetadata(hiveSessionProperties.getSessionProperties())
                 .build();
 
-        // A Presto page cannot contain a map with null keys, so a page based writer cannot write null keys
+        // A Trino page cannot contain a map with null keys, so a page based writer cannot write null keys
         List<TestColumn> testColumns = TEST_COLUMNS.stream()
                 .filter(TestHiveFileFormats::withoutNullMapKeyTests)
                 .collect(toList());
@@ -324,7 +323,7 @@ public class TestHiveFileFormats
                 .withRowsCount(rowCount)
                 .withSession(session)
                 .withFileSizePadding(fileSizePadding)
-                .withFileWriterFactory(new OrcFileWriterFactory(HDFS_ENVIRONMENT, TYPE_MANAGER, new NodeVersion("test"), false, STATS, new OrcWriterOptions()))
+                .withFileWriterFactory(new OrcFileWriterFactory(HDFS_ENVIRONMENT, TYPE_MANAGER, new NodeVersion("test"), STATS, new OrcWriterOptions()))
                 .isReadableByRecordCursor(createGenericHiveRecordCursorProvider(HDFS_ENVIRONMENT))
                 .isReadableByPageSource(new OrcPageSourceFactory(new OrcReaderOptions(), HDFS_ENVIRONMENT, STATS, UTC));
     }
@@ -1260,7 +1259,7 @@ public class TestHiveFileFormats
             try {
                 FileSplit split;
                 if (fileWriterFactory != null) {
-                    split = createTestFilePresto(file.getAbsolutePath(), storageFormat, compressionCodec, writeColumns, session, rowsCount, fileWriterFactory);
+                    split = createTestFileTrino(file.getAbsolutePath(), storageFormat, compressionCodec, writeColumns, session, rowsCount, fileWriterFactory);
                 }
                 else {
                     split = createTestFileHive(file.getAbsolutePath(), storageFormat, compressionCodec, writeColumns, rowsCount);
@@ -1291,16 +1290,10 @@ public class TestHiveFileFormats
                 HiveErrorCode expectedErrorCode,
                 String expectedMessage,
                 boolean withRecordPageSource)
-                throws Exception
         {
-            try {
-                assertRead(pageSourceFactory, cursorProvider, withRecordPageSource);
-                fail("failure is expected");
-            }
-            catch (TrinoException trinoException) {
-                assertEquals(trinoException.getErrorCode(), expectedErrorCode.toErrorCode());
-                assertEquals(trinoException.getMessage(), expectedMessage);
-            }
+            assertTrinoExceptionThrownBy(() -> assertRead(pageSourceFactory, cursorProvider, withRecordPageSource))
+                    .hasErrorCode(expectedErrorCode)
+                    .hasMessage(expectedMessage);
         }
     }
 }

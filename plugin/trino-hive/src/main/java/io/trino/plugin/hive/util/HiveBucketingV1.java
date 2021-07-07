@@ -40,9 +40,10 @@ final class HiveBucketingV1
 
     static int getBucketHashCode(List<TypeInfo> types, Page page, int position)
     {
-        checkArgument(types.size() == page.getChannelCount());
+        checkArgument(types.size() <= page.getChannelCount());
+
         int result = 0;
-        for (int i = 0; i < page.getChannelCount(); i++) {
+        for (int i = 0; i < types.size(); i++) {
             int fieldHash = hash(types.get(i), page.getBlock(i), position);
             result = result * 31 + fieldHash;
         }
@@ -74,43 +75,57 @@ final class HiveBucketingV1
             case PRIMITIVE:
                 PrimitiveTypeInfo typeInfo = (PrimitiveTypeInfo) type;
                 PrimitiveCategory primitiveCategory = typeInfo.getPrimitiveCategory();
-                Type prestoType = requireNonNull(HiveTypeTranslator.fromPrimitiveType(typeInfo));
+                Type trinoType = requireNonNull(HiveTypeTranslator.fromPrimitiveType(typeInfo));
                 switch (primitiveCategory) {
                     case BOOLEAN:
-                        return prestoType.getBoolean(block, position) ? 1 : 0;
+                        return trinoType.getBoolean(block, position) ? 1 : 0;
                     case BYTE:
-                        return SignedBytes.checkedCast(prestoType.getLong(block, position));
+                        return SignedBytes.checkedCast(trinoType.getLong(block, position));
                     case SHORT:
-                        return Shorts.checkedCast(prestoType.getLong(block, position));
+                        return Shorts.checkedCast(trinoType.getLong(block, position));
                     case INT:
-                        return toIntExact(prestoType.getLong(block, position));
+                        return toIntExact(trinoType.getLong(block, position));
                     case LONG:
-                        long bigintValue = prestoType.getLong(block, position);
+                        long bigintValue = trinoType.getLong(block, position);
                         return (int) ((bigintValue >>> 32) ^ bigintValue);
                     case FLOAT:
                         // convert to canonical NaN if necessary
-                        return floatToIntBits(intBitsToFloat(toIntExact(prestoType.getLong(block, position))));
+                        return floatToIntBits(intBitsToFloat(toIntExact(trinoType.getLong(block, position))));
                     case DOUBLE:
-                        long doubleValue = doubleToLongBits(prestoType.getDouble(block, position));
+                        long doubleValue = doubleToLongBits(trinoType.getDouble(block, position));
                         return (int) ((doubleValue >>> 32) ^ doubleValue);
                     case STRING:
-                        return hashBytes(0, prestoType.getSlice(block, position));
+                        return hashBytes(0, trinoType.getSlice(block, position));
                     case VARCHAR:
-                        return hashBytes(1, prestoType.getSlice(block, position));
+                        return hashBytes(1, trinoType.getSlice(block, position));
                     case DATE:
                         // day offset from 1970-01-01
-                        return toIntExact(prestoType.getLong(block, position));
-                    default:
-                        throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive primitive category: " + primitiveCategory);
+                        return toIntExact(trinoType.getLong(block, position));
+                    case TIMESTAMP:
+                        // We do not support bucketing on timestamp
+                        break;
+                    case DECIMAL:
+                    case CHAR:
+                    case BINARY:
+                    case TIMESTAMPLOCALTZ:
+                    case INTERVAL_YEAR_MONTH:
+                    case INTERVAL_DAY_TIME:
+                        // TODO
+                        break;
+                    case VOID:
+                    case UNKNOWN:
+                        break;
                 }
+                throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive primitive category: " + primitiveCategory);
             case LIST:
                 return hashOfList((ListTypeInfo) type, block.getObject(position, Block.class));
             case MAP:
                 return hashOfMap((MapTypeInfo) type, block.getObject(position, Block.class));
-            default:
+            case STRUCT:
+            case UNION:
                 // TODO: support more types, e.g. ROW
-                throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive category: " + type.getCategory());
         }
+        throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive category: " + type.getCategory());
     }
 
     private static int hash(TypeInfo type, Object value)
@@ -148,17 +163,31 @@ final class HiveBucketingV1
                     case DATE:
                         // day offset from 1970-01-01
                         return toIntExact((long) value);
-                    default:
-                        throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive primitive category: " + primitiveCategory);
+                    case TIMESTAMP:
+                        // We do not support bucketing on timestamp
+                        break;
+                    case DECIMAL:
+                    case CHAR:
+                    case BINARY:
+                    case TIMESTAMPLOCALTZ:
+                    case INTERVAL_YEAR_MONTH:
+                    case INTERVAL_DAY_TIME:
+                        // TODO
+                        break;
+                    case VOID:
+                    case UNKNOWN:
+                        break;
                 }
+                throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive primitive category: " + primitiveCategory);
             case LIST:
                 return hashOfList((ListTypeInfo) type, (Block) value);
             case MAP:
                 return hashOfMap((MapTypeInfo) type, (Block) value);
-            default:
+            case STRUCT:
+            case UNION:
                 // TODO: support more types, e.g. ROW
-                throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive category: " + type.getCategory());
         }
+        throw new UnsupportedOperationException("Computation of Hive bucket hashCode is not supported for Hive category: " + type.getCategory());
     }
 
     private static int hashOfMap(MapTypeInfo type, Block singleMapBlock)

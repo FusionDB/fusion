@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import io.trino.Session;
+import io.trino.cost.PlanNodeStatsEstimate;
 import io.trino.cost.StatsProvider;
 import io.trino.metadata.Metadata;
 import io.trino.spi.connector.ColumnHandle;
@@ -54,6 +55,7 @@ import io.trino.sql.planner.plan.ProjectNode;
 import io.trino.sql.planner.plan.SemiJoinNode;
 import io.trino.sql.planner.plan.SortNode;
 import io.trino.sql.planner.plan.SpatialJoinNode;
+import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.sql.planner.plan.TableWriterNode;
 import io.trino.sql.planner.plan.TopNNode;
 import io.trino.sql.planner.plan.UnionNode;
@@ -139,7 +141,11 @@ public final class PlanMatchPattern
 
     public static PlanMatchPattern tableScan(String expectedTableName)
     {
-        return TableScanMatcher.create(expectedTableName);
+        return node(TableScanNode.class)
+                .with(new TableScanMatcher(
+                        expectedTableName,
+                        Optional.empty(),
+                        Optional.empty()));
     }
 
     public static PlanMatchPattern tableScan(String expectedTableName, Map<String, String> columnReferences)
@@ -153,7 +159,16 @@ public final class PlanMatchPattern
             TupleDomain<Predicate<ColumnHandle>> enforcedConstraints,
             Map<String, Predicate<ColumnHandle>> expectedColumns)
     {
-        PlanMatchPattern pattern = ConnectorAwareTableScanMatcher.create(expectedTable, enforcedConstraints);
+        return tableScan(expectedTable, enforcedConstraints, expectedColumns, statistics -> true);
+    }
+
+    public static PlanMatchPattern tableScan(
+            Predicate<ConnectorTableHandle> expectedTable,
+            TupleDomain<Predicate<ColumnHandle>> enforcedConstraints,
+            Map<String, Predicate<ColumnHandle>> expectedColumns,
+            Predicate<Optional<PlanNodeStatsEstimate>> expectedStatistics)
+    {
+        PlanMatchPattern pattern = ConnectorAwareTableScanMatcher.create(expectedTable, enforcedConstraints, expectedStatistics);
         expectedColumns.entrySet().forEach(column -> pattern.withAlias(column.getKey(), new ColumnHandleMatcher(column.getValue())));
         return pattern;
     }
@@ -166,11 +181,22 @@ public final class PlanMatchPattern
                         .collect(toImmutableList()));
     }
 
+    public static PlanMatchPattern strictConstrainedTableScan(String expectedTableName, Map<String, String> columnReferences, Map<String, Domain> constraint)
+    {
+        return strictTableScan(expectedTableName, columnReferences)
+                .with(new TableScanMatcher(
+                        expectedTableName,
+                        Optional.of(constraint),
+                        Optional.empty()));
+    }
+
     public static PlanMatchPattern constrainedTableScan(String expectedTableName, Map<String, Domain> constraint)
     {
-        return TableScanMatcher.builder(expectedTableName)
-                .expectedConstraint(constraint)
-                .build();
+        return node(TableScanNode.class)
+                .with(new TableScanMatcher(
+                        expectedTableName,
+                        Optional.of(constraint),
+                        Optional.empty()));
     }
 
     public static PlanMatchPattern constrainedTableScan(String expectedTableName, Map<String, Domain> constraint, Map<String, String> columnReferences)
@@ -181,11 +207,12 @@ public final class PlanMatchPattern
 
     public static PlanMatchPattern constrainedTableScanWithTableLayout(String expectedTableName, Map<String, Domain> constraint, Map<String, String> columnReferences)
     {
-        PlanMatchPattern result = TableScanMatcher.builder(expectedTableName)
-                .expectedConstraint(constraint)
-                .hasTableLayout()
-                .build();
-        return result.addColumnReferences(expectedTableName, columnReferences);
+        return node(TableScanNode.class)
+                .with(new TableScanMatcher(
+                        expectedTableName,
+                        Optional.of(constraint),
+                        Optional.of(true)))
+                .addColumnReferences(expectedTableName, columnReferences);
     }
 
     public static PlanMatchPattern indexJoin(
@@ -374,6 +401,13 @@ public final class PlanMatchPattern
     public static PlanMatchPattern topNRanking(Consumer<TopNRankingMatcher.Builder> handler, PlanMatchPattern source)
     {
         TopNRankingMatcher.Builder builder = new TopNRankingMatcher.Builder(source);
+        handler.accept(builder);
+        return builder.build();
+    }
+
+    public static PlanMatchPattern patternRecognition(Consumer<PatternRecognitionMatcher.Builder> handler, PlanMatchPattern source)
+    {
+        PatternRecognitionMatcher.Builder builder = new PatternRecognitionMatcher.Builder(source);
         handler.accept(builder);
         return builder.build();
     }
@@ -781,7 +815,18 @@ public final class PlanMatchPattern
 
     public static PlanMatchPattern limit(long limit, List<Ordering> tiesResolvers, boolean partial, PlanMatchPattern source)
     {
-        return node(LimitNode.class, source).with(new LimitMatcher(limit, tiesResolvers, partial));
+        return limit(limit, tiesResolvers, partial, ImmutableList.of(), source);
+    }
+
+    public static PlanMatchPattern limit(long limit, List<Ordering> tiesResolvers, boolean partial, List<String> preSortedInputs, PlanMatchPattern source)
+    {
+        return node(LimitNode.class, source).with(new LimitMatcher(
+                limit,
+                tiesResolvers,
+                partial,
+                preSortedInputs.stream()
+                        .map(SymbolAlias::new)
+                        .collect(toImmutableList())));
     }
 
     public static PlanMatchPattern enforceSingleRow(PlanMatchPattern source)
@@ -842,6 +887,28 @@ public final class PlanMatchPattern
         }
 
         return match(newAliases.build());
+    }
+
+    public <T extends PlanNode> PlanMatchPattern with(Class<T> clazz, Predicate<T> predicate)
+    {
+        return with(new Matcher()
+        {
+            @Override
+            public boolean shapeMatches(PlanNode node)
+            {
+                return clazz.isInstance(node);
+            }
+
+            @Override
+            public MatchResult detailMatches(PlanNode node, StatsProvider stats, Session session, Metadata metadata, SymbolAliases symbolAliases)
+            {
+                if (predicate.test((T) node)) {
+                    return match();
+                }
+
+                return NO_MATCH;
+            }
+        });
     }
 
     public PlanMatchPattern with(Matcher matcher)

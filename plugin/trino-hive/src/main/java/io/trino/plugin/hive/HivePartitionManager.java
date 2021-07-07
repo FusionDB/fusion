@@ -92,7 +92,7 @@ public class HivePartitionManager
 
         Optional<HiveBucketFilter> bucketFilter = getHiveBucketFilter(hiveTableHandle, effectivePredicate);
         TupleDomain<HiveColumnHandle> compactEffectivePredicate = effectivePredicate
-                .transform(HiveColumnHandle.class::cast)
+                .transformKeys(HiveColumnHandle.class::cast)
                 .simplify(domainCompactionThreshold);
 
         if (partitionColumns.isEmpty()) {
@@ -192,6 +192,7 @@ public class HivePartitionManager
                 handle.getAnalyzePartitionValues(),
                 handle.getAnalyzeColumnNames(),
                 Optionals.combine(handle.getConstraintColumns(), columns, Sets::union),
+                handle.getProjectedColumns(),
                 handle.getTransaction());
     }
 

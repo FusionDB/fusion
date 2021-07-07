@@ -13,10 +13,8 @@
  */
 package io.trino.memory;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
@@ -46,19 +44,21 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.testing.TestingTaskContext.createTaskContext;
 import static java.lang.String.format;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 @Test(singleThreaded = true)
 public class TestMemoryPools
@@ -176,15 +176,11 @@ public class TestMemoryPools
     public void testMemoryFutureCancellation()
     {
         setUpCountStarFromOrdersWithJoin();
-        ListenableFuture<?> future = userPool.reserve(fakeQueryId, "test", TEN_MEGABYTES.toBytes());
+        ListenableFuture<Void> future = userPool.reserve(fakeQueryId, "test", TEN_MEGABYTES.toBytes());
         assertTrue(!future.isDone());
-        try {
-            future.cancel(true);
-            fail("cancel should fail");
-        }
-        catch (UnsupportedOperationException e) {
-            assertEquals(e.getMessage(), "cancellation is not supported");
-        }
+        assertThatThrownBy(() -> future.cancel(true))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("cancellation is not supported");
         userPool.free(fakeQueryId, "test", TEN_MEGABYTES.toBytes());
         assertTrue(future.isDone());
     }
@@ -318,7 +314,7 @@ public class TestMemoryPools
             assertFalse(isOperatorBlocked(drivers, reason));
             boolean progress = false;
             for (Driver driver : drivers) {
-                ListenableFuture<?> blocked = driver.process();
+                ListenableFuture<Void> blocked = driver.process();
                 progress = progress | blocked.isDone();
             }
             // query should not block
@@ -343,7 +339,7 @@ public class TestMemoryPools
     {
         for (Driver driver : drivers) {
             for (OperatorContext operatorContext : driver.getDriverContext().getOperatorContexts()) {
-                if (reason.apply(operatorContext)) {
+                if (reason.test(operatorContext)) {
                     return true;
                 }
             }
@@ -369,9 +365,9 @@ public class TestMemoryPools
         }
 
         @Override
-        public ListenableFuture<?> startMemoryRevoke()
+        public ListenableFuture<Void> startMemoryRevoke()
         {
-            return Futures.immediateFuture(null);
+            return immediateVoidFuture();
         }
 
         @Override

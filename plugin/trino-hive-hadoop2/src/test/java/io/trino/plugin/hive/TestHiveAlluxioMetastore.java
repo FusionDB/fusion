@@ -83,6 +83,12 @@ public class TestHiveAlluxioMetastore
     }
 
     @Override
+    public void testBucketedSortedTableEvolution()
+    {
+        // Alluxio metastore does not support create/insert/update operations
+    }
+
+    @Override
     public void testBucketedTableValidation()
             throws Exception
     {
@@ -227,7 +233,31 @@ public class TestHiveAlluxioMetastore
     }
 
     @Override
+    public void testApplyRedirection()
+    {
+        // Alluxio metastore does not support create/delete operations
+    }
+
+    @Override
+    public void testMaterializedViewMetadata()
+    {
+        // Alluxio metastore does not support create/delete operations
+    }
+
+    @Override
     public void testPreferredInsertLayout()
+    {
+        // Alluxio metastore does not support insert layout operations
+    }
+
+    @Override
+    public void testInsertBucketedTableLayout()
+    {
+        // Alluxio metastore does not support insert layout operations
+    }
+
+    @Override
+    public void testInsertPartitionedBucketedTableLayout()
     {
         // Alluxio metastore does not support insert layout operations
     }

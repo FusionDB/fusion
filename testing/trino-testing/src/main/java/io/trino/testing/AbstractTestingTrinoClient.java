@@ -57,13 +57,18 @@ public abstract class AbstractTestingTrinoClient<T>
 {
     private final TestingTrinoServer trinoServer;
     private final Session defaultSession;
-
-    private final OkHttpClient httpClient = new OkHttpClient();
+    private final OkHttpClient httpClient;
 
     protected AbstractTestingTrinoClient(TestingTrinoServer trinoServer, Session defaultSession)
     {
+        this(trinoServer, defaultSession, new OkHttpClient());
+    }
+
+    protected AbstractTestingTrinoClient(TestingTrinoServer trinoServer, Session defaultSession, OkHttpClient httpClient)
+    {
         this.trinoServer = requireNonNull(trinoServer, "trinoServer is null");
         this.defaultSession = requireNonNull(defaultSession, "defaultSession is null");
+        this.httpClient = requireNonNull(httpClient, "httpClient is null");
     }
 
     @Override
@@ -146,6 +151,7 @@ public abstract class AbstractTestingTrinoClient<T>
         return new ClientSession(
                 server,
                 session.getIdentity().getUser(),
+                Optional.empty(),
                 session.getSource().orElse(null),
                 session.getTraceToken(),
                 session.getClientTags(),

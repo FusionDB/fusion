@@ -21,18 +21,18 @@ public class ConfigCdh5
         extends ConfigDefault
 {
     /**
-     * export HADOOP_BASE_IMAGE="prestodev/cdh5.15-hive"
+     * export HADOOP_BASE_IMAGE="ghcr.io/trinodb/testing/cdh5.15-hive"
      * export DISTRO_SKIP_GROUP=skip_on_cdh,iceberg
      */
     @Override
     public String getHadoopBaseImage()
     {
-        return "prestodev/cdh5.15-hive";
+        return "ghcr.io/trinodb/testing/cdh5.15-hive";
     }
 
     @Override
     public List<String> getExcludedGroups()
     {
-        return ImmutableList.of("skip_on_cdh", "iceberg");
+        return ImmutableList.of("skip_on_cdh");
     }
 }

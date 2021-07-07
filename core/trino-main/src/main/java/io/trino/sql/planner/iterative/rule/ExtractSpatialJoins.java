@@ -344,6 +344,7 @@ public class ExtractSpatialJoins
                 joinNode.getCriteria(),
                 joinNode.getLeftOutputSymbols(),
                 joinNode.getRightOutputSymbols(),
+                joinNode.isMaySkipOutputDuplicates(),
                 Optional.of(newFilter),
                 joinNode.getLeftHashSymbol(),
                 joinNode.getRightHashSymbol(),
@@ -598,7 +599,7 @@ public class ExtractSpatialJoins
                 .setName(QualifiedName.of("spatial_partitions"))
                 .addArgument(typeSignature, new Cast(new StringLiteral(KdbTreeUtils.toJson(kdbTree)), toSqlType(metadata.getType(typeSignature))))
                 .addArgument(GEOMETRY_TYPE_SIGNATURE, geometry);
-        radius.map(value -> spatialPartitionsCall.addArgument(DOUBLE, value));
+        radius.ifPresent(value -> spatialPartitionsCall.addArgument(DOUBLE, value));
         FunctionCall partitioningFunction = spatialPartitionsCall.build();
 
         Symbol partitionsSymbol = context.getSymbolAllocator().newSymbol(partitioningFunction, new ArrayType(INTEGER));

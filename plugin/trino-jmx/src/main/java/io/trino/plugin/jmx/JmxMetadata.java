@@ -87,7 +87,7 @@ public class JmxMetadata
     public JmxMetadata(MBeanServer mbeanServer, JmxHistoricalData jmxHistoricalData)
     {
         this.mbeanServer = requireNonNull(mbeanServer, "mbeanServer is null");
-        this.jmxHistoricalData = requireNonNull(jmxHistoricalData, "jmxStatsHolder is null");
+        this.jmxHistoricalData = requireNonNull(jmxHistoricalData, "jmxHistoricalData is null");
     }
 
     @Override
@@ -223,7 +223,7 @@ public class JmxMetadata
     {
         ImmutableList.Builder<SchemaTableName> tableNames = ImmutableList.builder();
         for (ObjectName objectName : mbeanServer.queryNames(WILDCARD, null)) {
-            // todo remove lower case when presto supports mixed case names
+            // todo remove lower case when Trino supports mixed case names
             tableNames.add(new SchemaTableName(JMX_SCHEMA_NAME, objectName.getCanonicalName().toLowerCase(ENGLISH)));
         }
         return tableNames.build();
@@ -295,7 +295,7 @@ public class JmxMetadata
 
         JmxTableHandle newTableHandle = new JmxTableHandle(tableHandle.getTableName(), tableHandle.getObjectNames(), tableHandle.getColumnHandles(), tableHandle.isLiveData(), newDomain);
 
-        return Optional.of(new ConstraintApplicationResult<>(newTableHandle, TupleDomain.withColumnDomains(otherDomains)));
+        return Optional.of(new ConstraintApplicationResult<>(newTableHandle, TupleDomain.withColumnDomains(otherDomains), false));
     }
 
     private static Type getColumnType(MBeanAttributeInfo attribute)

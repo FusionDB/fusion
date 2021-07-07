@@ -56,10 +56,10 @@ import static io.trino.spi.type.BigintType.BIGINT;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.stream.Collectors.toList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 public class TestArbitraryOutputBuffer
 {
@@ -89,18 +89,13 @@ public class TestArbitraryOutputBuffer
     @Test
     public void testInvalidConstructorArg()
     {
-        try {
-            createArbitraryBuffer(createInitialEmptyOutputBuffers(ARBITRARY).withBuffer(FIRST, BROADCAST_PARTITION_ID).withNoMoreBufferIds(), DataSize.ofBytes(0));
-            fail("Expected IllegalStateException");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
-        try {
-            createArbitraryBuffer(createInitialEmptyOutputBuffers(ARBITRARY), DataSize.ofBytes(0));
-            fail("Expected IllegalStateException");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
+        assertThatThrownBy(() -> createArbitraryBuffer(createInitialEmptyOutputBuffers(ARBITRARY).withBuffer(FIRST, BROADCAST_PARTITION_ID).withNoMoreBufferIds(), DataSize.ofBytes(0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("maxBufferSize must be at least 1");
+
+        assertThatThrownBy(() -> createArbitraryBuffer(createInitialEmptyOutputBuffers(ARBITRARY), DataSize.ofBytes(0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("maxBufferSize must be at least 1");
     }
 
     @Test
@@ -138,7 +133,7 @@ public class TestArbitraryOutputBuffer
         assertQueueState(buffer, 9, FIRST, 1, 3);
 
         // try to add one more page, which should block
-        ListenableFuture<?> future = enqueuePage(buffer, createPage(13));
+        ListenableFuture<Void> future = enqueuePage(buffer, createPage(13));
         assertFalse(future.isDone());
         assertQueueState(buffer, 10, FIRST, 1, 3);
 
@@ -343,15 +338,12 @@ public class TestArbitraryOutputBuffer
 
         assertFalse(buffer.isFinished());
 
-        try {
-            buffer.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY)
-                    .withBuffer(FIRST, BROADCAST_PARTITION_ID)
-                    .withBuffer(SECOND, BROADCAST_PARTITION_ID)
-                    .withNoMoreBufferIds());
-            fail("Expected IllegalStateException from addQueue after noMoreQueues has been called");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
+        assertThatThrownBy(() -> buffer.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY)
+                .withBuffer(FIRST, BROADCAST_PARTITION_ID)
+                .withBuffer(SECOND, BROADCAST_PARTITION_ID)
+                .withNoMoreBufferIds()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Expected buffer to not change after no more buffers is set");
     }
 
     @Test
@@ -386,16 +378,12 @@ public class TestArbitraryOutputBuffer
         buffer.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY).withNoMoreBufferIds());
         assertFalse(buffer.isFinished());
 
-        try {
-            OutputBuffers outputBuffers = createInitialEmptyOutputBuffers(ARBITRARY)
-                    .withBuffer(FIRST, BROADCAST_PARTITION_ID)
-                    .withNoMoreBufferIds();
-
-            buffer.setOutputBuffers(outputBuffers);
-            fail("Expected IllegalStateException from addQueue after noMoreQueues has been called");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
+        OutputBuffers outputBuffers = createInitialEmptyOutputBuffers(ARBITRARY)
+                .withBuffer(FIRST, BROADCAST_PARTITION_ID)
+                .withNoMoreBufferIds();
+        assertThatThrownBy(() -> buffer.setOutputBuffers(outputBuffers))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Expected buffer to not change after no more buffers is set");
     }
 
     @Test
@@ -666,8 +654,8 @@ public class TestArbitraryOutputBuffer
         }
 
         // enqueue the addition two pages more pages
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));
@@ -748,8 +736,8 @@ public class TestArbitraryOutputBuffer
         }
 
         // add two pages to the buffer queue
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));
@@ -821,8 +809,8 @@ public class TestArbitraryOutputBuffer
         }
 
         // add two pages to the buffer queue
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));
@@ -998,10 +986,10 @@ public class TestArbitraryOutputBuffer
         return getFuture(future, maxWait);
     }
 
-    private static ListenableFuture<?> enqueuePage(OutputBuffer buffer, Page page)
+    private static ListenableFuture<Void> enqueuePage(OutputBuffer buffer, Page page)
     {
         buffer.enqueue(ImmutableList.of(serializePage(page)));
-        ListenableFuture<?> future = buffer.isFull();
+        ListenableFuture<Void> future = buffer.isFull();
         assertFalse(future.isDone());
         return future;
     }

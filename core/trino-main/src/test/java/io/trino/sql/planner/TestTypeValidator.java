@@ -102,7 +102,9 @@ public class TestTypeValidator
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
                 TupleDomain.all(),
-                false);
+                Optional.empty(),
+                false,
+                Optional.empty());
     }
 
     @Test

@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableMap;
 import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.trino.plugin.hive.HiveConfig;
-import io.trino.plugin.hive.HiveMetadata;
 import io.trino.plugin.hive.HiveMetastoreClosure;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.TransactionalMetadataFactory;
@@ -114,7 +113,7 @@ public class RegisterPartitionProcedure
         }
 
         HiveIdentity identity = new HiveIdentity(session);
-        HdfsContext hdfsContext = new HdfsContext(session, schemaName, tableName);
+        HdfsContext hdfsContext = new HdfsContext(session);
         SchemaTableName schemaTableName = new SchemaTableName(schemaName, tableName);
 
         Table table = metastore.getTable(identity, schemaName, tableName)
@@ -144,7 +143,7 @@ public class RegisterPartitionProcedure
             throw new TrinoException(INVALID_PROCEDURE_ARGUMENT, "Partition location does not exist: " + partitionLocation);
         }
 
-        SemiTransactionalHiveMetastore metastore = ((HiveMetadata) hiveMetadataFactory.create()).getMetastore();
+        SemiTransactionalHiveMetastore metastore = hiveMetadataFactory.create().getMetastore();
 
         metastore.addPartition(
                 session,

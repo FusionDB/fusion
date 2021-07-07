@@ -47,6 +47,7 @@ import io.trino.sql.tree.NotExpression;
 import io.trino.sql.tree.SymbolReference;
 
 import javax.annotation.Nullable;
+import javax.inject.Inject;
 
 import java.util.Map;
 import java.util.Optional;
@@ -83,6 +84,7 @@ public class FilterStatsCalculator
     private final StatsNormalizer normalizer;
     private final LiteralEncoder literalEncoder;
 
+    @Inject
     public FilterStatsCalculator(Metadata metadata, ScalarStatsCalculator scalarStatsCalculator, StatsNormalizer normalizer)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
@@ -107,7 +109,7 @@ public class FilterStatsCalculator
         // TODO reuse io.trino.sql.planner.iterative.rule.SimplifyExpressions.rewrite
 
         Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(session, predicate, types);
-        ExpressionInterpreter interpreter = ExpressionInterpreter.expressionOptimizer(predicate, metadata, session, expressionTypes);
+        ExpressionInterpreter interpreter = new ExpressionInterpreter(predicate, metadata, session, expressionTypes);
         Object value = interpreter.optimize(NoOpSymbolResolver.INSTANCE);
 
         if (value == null) {
@@ -175,9 +177,8 @@ public class FilterStatsCalculator
                     return estimateLogicalAnd(node.getLeft(), node.getRight());
                 case OR:
                     return estimateLogicalOr(node.getLeft(), node.getRight());
-                default:
-                    throw new IllegalArgumentException("Unexpected binary operator: " + node.getOperator());
             }
+            throw new IllegalArgumentException("Unexpected binary operator: " + node.getOperator());
         }
 
         private PlanNodeStatsEstimate estimateLogicalAnd(Expression left, Expression right)

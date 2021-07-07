@@ -17,17 +17,18 @@ import com.google.common.primitives.Shorts;
 import io.trino.hadoop.HadoopNative;
 import io.trino.plugin.hive.authentication.GenericExceptionAction;
 import io.trino.plugin.hive.authentication.HdfsAuthentication;
+import io.trino.plugin.hive.fs.TrinoFileSystemCache;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.security.ConnectorIdentity;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileSystemManager;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 
 import javax.inject.Inject;
 
 import java.io.IOException;
-import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.lang.Integer.parseUnsignedInt;
@@ -37,6 +38,7 @@ public class HdfsEnvironment
 {
     static {
         HadoopNative.requireHadoopNative();
+        FileSystemManager.registerCache(TrinoFileSystemCache.INSTANCE);
     }
 
     private final HdfsConfiguration hdfsConfiguration;
@@ -104,66 +106,21 @@ public class HdfsEnvironment
     public static class HdfsContext
     {
         private final ConnectorIdentity identity;
-        private final Optional<String> source;
-        private final Optional<String> queryId;
-        private final Optional<String> schemaName;
-        private final Optional<String> tableName;
 
         public HdfsContext(ConnectorIdentity identity)
         {
             this.identity = requireNonNull(identity, "identity is null");
-            this.source = Optional.empty();
-            this.queryId = Optional.empty();
-            this.schemaName = Optional.empty();
-            this.tableName = Optional.empty();
         }
 
-        public HdfsContext(ConnectorSession session, String schemaName)
+        public HdfsContext(ConnectorSession session)
         {
             requireNonNull(session, "session is null");
-            requireNonNull(schemaName, "schemaName is null");
             this.identity = requireNonNull(session.getIdentity(), "session.getIdentity() is null");
-            this.source = requireNonNull(session.getSource(), "session.getSource()");
-            this.queryId = Optional.of(session.getQueryId());
-            this.schemaName = Optional.of(schemaName);
-            this.tableName = Optional.empty();
-        }
-
-        public HdfsContext(ConnectorSession session, String schemaName, String tableName)
-        {
-            requireNonNull(session, "session is null");
-            requireNonNull(schemaName, "schemaName is null");
-            requireNonNull(tableName, "tableName is null");
-            this.identity = requireNonNull(session.getIdentity(), "session.getIdentity() is null");
-            this.source = requireNonNull(session.getSource(), "session.getSource()");
-            this.queryId = Optional.of(session.getQueryId());
-            this.schemaName = Optional.of(schemaName);
-            this.tableName = Optional.of(tableName);
         }
 
         public ConnectorIdentity getIdentity()
         {
             return identity;
-        }
-
-        public Optional<String> getSource()
-        {
-            return source;
-        }
-
-        public Optional<String> getQueryId()
-        {
-            return queryId;
-        }
-
-        public Optional<String> getSchemaName()
-        {
-            return schemaName;
-        }
-
-        public Optional<String> getTableName()
-        {
-            return tableName;
         }
 
         @Override
@@ -172,10 +129,6 @@ public class HdfsEnvironment
             return toStringHelper(this)
                     .omitNullValues()
                     .add("user", identity)
-                    .add("source", source.orElse(null))
-                    .add("queryId", queryId.orElse(null))
-                    .add("schemaName", schemaName.orElse(null))
-                    .add("tableName", tableName.orElse(null))
                     .toString();
         }
     }

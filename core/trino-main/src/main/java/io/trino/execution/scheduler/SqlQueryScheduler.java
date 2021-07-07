@@ -181,7 +181,7 @@ public class SqlQueryScheduler
             DynamicFilterService dynamicFilterService)
     {
         this.queryStateMachine = requireNonNull(queryStateMachine, "queryStateMachine is null");
-        this.executionPolicy = requireNonNull(executionPolicy, "schedulerPolicyFactory is null");
+        this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
         this.schedulerStats = requireNonNull(schedulerStats, "schedulerStats is null");
         this.summarizeTaskInfo = summarizeTaskInfo;
         this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
@@ -350,7 +350,7 @@ public class SqlQueryScheduler
             SplitSource splitSource = entry.getValue();
             Optional<CatalogName> catalogName = Optional.of(splitSource.getCatalogName())
                     .filter(catalog -> !isInternalSystemConnector(catalog));
-            NodeSelector nodeSelector = nodeScheduler.createNodeSelector(catalogName);
+            NodeSelector nodeSelector = nodeScheduler.createNodeSelector(session, catalogName);
             SplitPlacementPolicy placementPolicy = new DynamicSplitPlacementPolicy(nodeSelector, stage::getAllTasks);
 
             checkArgument(!plan.getFragment().getStageExecutionDescriptor().isStageGroupedExecution());
@@ -377,7 +377,7 @@ public class SqlQueryScheduler
                     stage,
                     sourceTasksProvider,
                     writerTasksProvider,
-                    nodeScheduler.createNodeSelector(Optional.empty()),
+                    nodeScheduler.createNodeSelector(session, Optional.empty()),
                     schedulerExecutor,
                     getWriterMinSize(session));
             whenAllStages(childStages, StageState::isDone)
@@ -391,7 +391,7 @@ public class SqlQueryScheduler
                 // contains local source
                 List<PlanNodeId> schedulingOrder = plan.getFragment().getPartitionedSources();
                 Optional<CatalogName> catalogName = partitioningHandle.getConnectorId();
-                catalogName.orElseThrow(() -> new IllegalArgumentException("No connector ID for partitioning handle: " + partitioningHandle));
+                checkArgument(catalogName.isPresent(), "No connector ID for partitioning handle: %s", partitioningHandle);
                 List<ConnectorPartitionHandle> connectorPartitionHandles;
                 boolean groupedExecutionForStage = plan.getFragment().getStageExecutionDescriptor().isStageGroupedExecution();
                 if (groupedExecutionForStage) {
@@ -412,7 +412,7 @@ public class SqlQueryScheduler
                     // verify execution is consistent with planner's decision on dynamic lifespan schedule
                     verify(bucketNodeMap.isDynamic() == dynamicLifespanSchedule);
 
-                    stageNodeList = new ArrayList<>(nodeScheduler.createNodeSelector(catalogName).allNodes());
+                    stageNodeList = new ArrayList<>(nodeScheduler.createNodeSelector(session, catalogName).allNodes());
                     Collections.shuffle(stageNodeList);
                     bucketToPartition = Optional.empty();
                 }
@@ -439,7 +439,7 @@ public class SqlQueryScheduler
                         bucketNodeMap,
                         splitBatchSize,
                         getConcurrentLifespansPerNode(session),
-                        nodeScheduler.createNodeSelector(catalogName),
+                        nodeScheduler.createNodeSelector(session, catalogName),
                         connectorPartitionHandles,
                         dynamicFilterService));
             }
@@ -541,7 +541,7 @@ public class SqlQueryScheduler
             Set<StageId> completedStages = new HashSet<>();
             ExecutionSchedule executionSchedule = executionPolicy.createExecutionSchedule(stages.values());
             while (!executionSchedule.isFinished()) {
-                List<ListenableFuture<?>> blockedStages = new ArrayList<>();
+                List<ListenableFuture<Void>> blockedStages = new ArrayList<>();
                 for (SqlStageExecution stage : executionSchedule.getStagesToSchedule()) {
                     stage.beginScheduling();
 
@@ -593,7 +593,7 @@ public class SqlQueryScheduler
                     try (TimeStat.BlockTimer timer = schedulerStats.getSleepTime().time()) {
                         tryGetFutureValue(whenAnyComplete(blockedStages), 1, SECONDS);
                     }
-                    for (ListenableFuture<?> blockedStage : blockedStages) {
+                    for (ListenableFuture<Void> blockedStage : blockedStages) {
                         blockedStage.cancel(true);
                     }
                 }
@@ -646,13 +646,13 @@ public class SqlQueryScheduler
         }
     }
 
-    private static ListenableFuture<?> whenAllStages(Collection<SqlStageExecution> stages, Predicate<StageState> predicate)
+    private static ListenableFuture<Void> whenAllStages(Collection<SqlStageExecution> stages, Predicate<StageState> predicate)
     {
         checkArgument(!stages.isEmpty(), "stages is empty");
         Set<StageId> stageIds = stages.stream()
                 .map(SqlStageExecution::getStageId)
                 .collect(toCollection(Sets::newConcurrentHashSet));
-        SettableFuture<?> future = SettableFuture.create();
+        SettableFuture<Void> future = SettableFuture.create();
 
         for (SqlStageExecution stage : stages) {
             stage.addStateChangeListener(state -> {

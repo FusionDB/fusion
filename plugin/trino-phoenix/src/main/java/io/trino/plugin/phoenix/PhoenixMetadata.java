@@ -14,10 +14,12 @@
 package io.trino.plugin.phoenix;
 
 import io.airlift.slice.Slice;
+import io.trino.plugin.jdbc.DefaultJdbcMetadata;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
-import io.trino.plugin.jdbc.JdbcMetadata;
+import io.trino.plugin.jdbc.JdbcIdentity;
 import io.trino.plugin.jdbc.JdbcMetadataConfig;
 import io.trino.plugin.jdbc.JdbcTableHandle;
+import io.trino.plugin.jdbc.mapping.IdentifierMapping;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.AggregationApplicationResult;
@@ -30,6 +32,7 @@ import io.trino.spi.connector.ConnectorOutputTableHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
+import io.trino.spi.connector.ConnectorTableSchema;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.TrinoPrincipal;
 import io.trino.spi.statistics.ComputedStatistics;
@@ -46,28 +49,29 @@ import java.util.Optional;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.plugin.phoenix.MetadataUtil.getEscapedTableName;
-import static io.trino.plugin.phoenix.MetadataUtil.toPrestoSchemaName;
+import static io.trino.plugin.phoenix.MetadataUtil.toTrinoSchemaName;
 import static io.trino.plugin.phoenix.PhoenixErrorCode.PHOENIX_METADATA_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.lang.String.format;
-import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static org.apache.phoenix.util.SchemaUtil.getEscapedArgument;
 
 public class PhoenixMetadata
-        extends JdbcMetadata
+        extends DefaultJdbcMetadata
 {
     // Maps to Phoenix's default empty schema
     public static final String DEFAULT_SCHEMA = "default";
     // col name used for PK if none provided in DDL
     private static final String ROWKEY = "ROWKEY";
     private final PhoenixClient phoenixClient;
+    private final IdentifierMapping identifierMapping;
 
     @Inject
-    public PhoenixMetadata(PhoenixClient phoenixClient, JdbcMetadataConfig metadataConfig)
+    public PhoenixMetadata(PhoenixClient phoenixClient, JdbcMetadataConfig metadataConfig, IdentifierMapping identifierMapping)
     {
         super(phoenixClient, metadataConfig.isAllowDropTable());
-        this.phoenixClient = requireNonNull(phoenixClient, "client is null");
+        this.phoenixClient = requireNonNull(phoenixClient, "phoenixClient is null");
+        this.identifierMapping = requireNonNull(identifierMapping, "identifierMapping is null");
     }
 
     @Override
@@ -77,25 +81,38 @@ public class PhoenixMetadata
                 .map(tableHandle -> new JdbcTableHandle(
                         schemaTableName,
                         tableHandle.getCatalogName(),
-                        toPrestoSchemaName(Optional.ofNullable(tableHandle.getSchemaName())).orElse(null),
+                        toTrinoSchemaName(tableHandle.getSchemaName()),
                         tableHandle.getTableName()))
                 .orElse(null);
     }
 
     @Override
-    public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table)
-    {
-        return getTableMetadata(session, table, false);
-    }
-
-    private ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table, boolean rowkeyRequired)
+    public ConnectorTableSchema getTableSchema(ConnectorSession session, ConnectorTableHandle table)
     {
         JdbcTableHandle handle = (JdbcTableHandle) table;
-        List<ColumnMetadata> columnMetadata = phoenixClient.getColumns(session, handle).stream()
-                .filter(column -> rowkeyRequired || !ROWKEY.equalsIgnoreCase(column.getColumnName()))
+        return new ConnectorTableSchema(
+                getSchemaTableName(handle),
+                getColumnMetadata(session, handle).stream()
+                        .map(ColumnMetadata::getColumnSchema)
+                        .collect(toImmutableList()));
+    }
+
+    @Override
+    public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table)
+    {
+        JdbcTableHandle handle = (JdbcTableHandle) table;
+        return new ConnectorTableMetadata(
+                getSchemaTableName(handle),
+                getColumnMetadata(session, handle),
+                phoenixClient.getTableProperties(session, handle));
+    }
+
+    private List<ColumnMetadata> getColumnMetadata(ConnectorSession session, JdbcTableHandle handle)
+    {
+        return phoenixClient.getColumns(session, handle).stream()
+                .filter(column -> !ROWKEY.equalsIgnoreCase(column.getColumnName()))
                 .map(JdbcColumnHandle::getColumnMetadata)
                 .collect(toImmutableList());
-        return new ConnectorTableMetadata(handle.getSchemaTableName(), columnMetadata, phoenixClient.getTableProperties(session, handle));
     }
 
     @Override
@@ -105,7 +122,7 @@ public class PhoenixMetadata
         if (DEFAULT_SCHEMA.equalsIgnoreCase(schemaName)) {
             throw new TrinoException(NOT_SUPPORTED, "Can't create 'default' schema which maps to Phoenix empty schema");
         }
-        phoenixClient.execute(session, format("CREATE SCHEMA %s", getEscapedArgument(toMetadataCasing(session, schemaName))));
+        phoenixClient.execute(session, format("CREATE SCHEMA %s", getEscapedArgument(toRemoteSchemaName(session, schemaName))));
     }
 
     @Override
@@ -114,21 +131,17 @@ public class PhoenixMetadata
         if (DEFAULT_SCHEMA.equalsIgnoreCase(schemaName)) {
             throw new TrinoException(NOT_SUPPORTED, "Can't drop 'default' schema which maps to Phoenix empty schema");
         }
-        phoenixClient.execute(session, format("DROP SCHEMA %s", getEscapedArgument(toMetadataCasing(session, schemaName))));
+        phoenixClient.execute(session, format("DROP SCHEMA %s", getEscapedArgument(toRemoteSchemaName(session, schemaName))));
     }
 
-    private String toMetadataCasing(ConnectorSession session, String schemaName)
+    private String toRemoteSchemaName(ConnectorSession session, String schemaName)
     {
         try (Connection connection = phoenixClient.getConnection(session)) {
-            boolean uppercase = connection.getMetaData().storesUpperCaseIdentifiers();
-            if (uppercase) {
-                schemaName = schemaName.toUpperCase(ENGLISH);
-            }
+            return identifierMapping.toRemoteSchemaName(JdbcIdentity.from(session), connection, schemaName);
         }
         catch (SQLException e) {
             throw new TrinoException(PHOENIX_METADATA_ERROR, "Couldn't get casing for the schema name", e);
         }
-        return schemaName;
     }
 
     @Override
@@ -169,7 +182,7 @@ public class PhoenixMetadata
                 .collect(toImmutableList());
 
         return new PhoenixOutputTableHandle(
-                Optional.ofNullable(handle.getSchemaName()),
+                handle.getSchemaName(),
                 handle.getTableName(),
                 columnHandles.stream().map(JdbcColumnHandle::getColumnName).collect(toImmutableList()),
                 columnHandles.stream().map(JdbcColumnHandle::getColumnType).collect(toImmutableList()),
@@ -189,7 +202,7 @@ public class PhoenixMetadata
         JdbcTableHandle handle = (JdbcTableHandle) tableHandle;
         phoenixClient.execute(session, format(
                 "ALTER TABLE %s ADD %s %s",
-                getEscapedTableName(Optional.ofNullable(handle.getSchemaName()), handle.getTableName()),
+                getEscapedTableName(handle.getSchemaName(), handle.getTableName()),
                 column.getName(),
                 phoenixClient.toWriteMapping(session, column.getType()).getDataType()));
     }
@@ -201,7 +214,7 @@ public class PhoenixMetadata
         JdbcColumnHandle columnHandle = (JdbcColumnHandle) column;
         phoenixClient.execute(session, format(
                 "ALTER TABLE %s DROP COLUMN %s",
-                getEscapedTableName(Optional.ofNullable(handle.getSchemaName()), handle.getTableName()),
+                getEscapedTableName(handle.getSchemaName(), handle.getTableName()),
                 columnHandle.getColumnName()));
     }
 
@@ -215,7 +228,7 @@ public class PhoenixMetadata
                 .anyMatch(ROWKEY::equals);
         if (hasRowkey) {
             JdbcTableHandle jdbcHandle = (JdbcTableHandle) tableHandle;
-            phoenixClient.execute(session, format("DROP SEQUENCE %s", getEscapedTableName(Optional.ofNullable(jdbcHandle.getSchemaName()), jdbcHandle.getTableName() + "_sequence")));
+            phoenixClient.execute(session, format("DROP SEQUENCE %s", getEscapedTableName(jdbcHandle.getSchemaName(), jdbcHandle.getTableName() + "_sequence")));
         }
         phoenixClient.dropTable(session, (JdbcTableHandle) tableHandle);
     }

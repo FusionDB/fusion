@@ -52,7 +52,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.trino.RowPagesBuilder.rowPagesBuilder;
 import static io.trino.SessionTestUtils.TEST_SESSION;
@@ -63,11 +62,10 @@ import static io.trino.testing.TestingHandles.TEST_TABLE_HANDLE;
 import static io.trino.testing.TestingTaskContext.createTaskContext;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
-import static org.testng.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 @Test(singleThreaded = true)
 public class TestDriver
@@ -108,7 +106,7 @@ public class TestDriver
         assertSame(driver.getDriverContext(), driverContext);
 
         assertFalse(driver.isFinished());
-        ListenableFuture<?> blocked = driver.processFor(new Duration(1, TimeUnit.SECONDS));
+        ListenableFuture<Void> blocked = driver.processFor(new Duration(1, TimeUnit.SECONDS));
         assertTrue(blocked.isDone());
         assertTrue(driver.isFinished());
 
@@ -210,13 +208,9 @@ public class TestDriver
         driver.close();
         assertTrue(driver.isFinished());
 
-        try {
-            driverProcessFor.get(1, TimeUnit.SECONDS);
-            fail("Expected InterruptedException");
-        }
-        catch (ExecutionException e) {
-            assertDriverInterrupted(e.getCause());
-        }
+        assertThatThrownBy(() -> driverProcessFor.get(1, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCause(new TrinoException(GENERIC_INTERNAL_ERROR, "Driver was interrupted"));
     }
 
     @Test
@@ -301,20 +295,9 @@ public class TestDriver
         driver.close();
         assertTrue(driver.isFinished());
 
-        try {
-            driverProcessFor.get(1, TimeUnit.SECONDS);
-            fail("Expected InterruptedException");
-        }
-        catch (ExecutionException e) {
-            assertDriverInterrupted(e.getCause());
-        }
-    }
-
-    private void assertDriverInterrupted(Throwable cause)
-    {
-        checkArgument(cause instanceof TrinoException, "Expected root cause exception to be an instance of TrinoException");
-        assertEquals(((TrinoException) cause).getErrorCode(), GENERIC_INTERNAL_ERROR.toErrorCode());
-        assertEquals(cause.getMessage(), "Driver was interrupted");
+        assertThatThrownBy(() -> driverProcessFor.get(1, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCause(new TrinoException(GENERIC_INTERNAL_ERROR, "Driver was interrupted"));
     }
 
     private static Split newMockSplit()
@@ -403,7 +386,7 @@ public class TestDriver
         }
 
         @Override
-        public ListenableFuture<?> isBlocked()
+        public ListenableFuture<Void> isBlocked()
         {
             waitForUnlock();
             return NOT_BLOCKED;
@@ -452,7 +435,7 @@ public class TestDriver
         }
 
         @Override
-        public ListenableFuture<?> isBlocked()
+        public ListenableFuture<Void> isBlocked()
         {
             // this operator is always blocked and when queried by the driver
             // it triggers memory revocation so that the driver gets unblocked
@@ -477,7 +460,7 @@ public class TestDriver
         }
 
         @Override
-        public ListenableFuture<?> isBlocked()
+        public ListenableFuture<Void> isBlocked()
         {
             return NOT_BLOCKED;
         }

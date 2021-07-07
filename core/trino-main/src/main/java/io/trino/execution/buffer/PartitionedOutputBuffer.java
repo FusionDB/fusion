@@ -155,7 +155,7 @@ public class PartitionedOutputBuffer
     }
 
     @Override
-    public ListenableFuture<?> isFull()
+    public ListenableFuture<Void> isFull()
     {
         return memoryManager.getBufferBlockedFuture();
     }
@@ -215,7 +215,7 @@ public class PartitionedOutputBuffer
     @Override
     public void acknowledge(OutputBufferId outputBufferId, long sequenceId)
     {
-        requireNonNull(outputBufferId, "bufferId is null");
+        requireNonNull(outputBufferId, "outputBufferId is null");
 
         partitions.get(outputBufferId.getId()).acknowledgePages(sequenceId);
     }

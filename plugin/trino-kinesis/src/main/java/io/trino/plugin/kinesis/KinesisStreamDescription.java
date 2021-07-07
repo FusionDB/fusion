@@ -22,7 +22,7 @@ import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.util.Objects.requireNonNull;
 
 /**
- * This Class maintains all the details of Kinesis stream like name, fields of data, Presto table stream is mapping to, tables's schema name
+ * This Class maintains all the details of Kinesis stream like name, fields of data, Trino table stream is mapping to, tables's schema name
  */
 public class KinesisStreamDescription
 {
@@ -40,7 +40,7 @@ public class KinesisStreamDescription
     {
         checkArgument(!isNullOrEmpty(tableName), "tableName is null or is empty");
         this.tableName = tableName;
-        this.streamName = requireNonNull(streamName, "topicName is null");
+        this.streamName = requireNonNull(streamName, "streamName is null");
         this.schemaName = schemaName;
         this.message = message;
     }

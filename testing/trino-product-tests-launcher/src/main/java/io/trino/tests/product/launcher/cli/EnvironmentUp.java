@@ -14,6 +14,7 @@
 package io.trino.tests.product.launcher.cli;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Module;
 import io.airlift.log.Logger;
 import io.trino.tests.product.launcher.Extensions;
@@ -32,6 +33,8 @@ import picocli.CommandLine.ExitCode;
 import javax.inject.Inject;
 
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 
@@ -82,13 +85,18 @@ public final class EnvironmentUp
 
     public static class EnvironmentUpOptions
     {
-        @Option(names = "--background", description = "Keep containers running in the background once they are started")
+        private static final String DEFAULT_VALUE = "(default: ${DEFAULT-VALUE})";
+
+        @Option(names = "--background", description = "Keep containers running in the background once they are started " + DEFAULT_VALUE)
         public boolean background;
 
         @Option(names = "--environment", paramLabel = "<environment>", description = "Name of the environment to start", required = true)
         public String environment;
 
-        @Option(names = "--logs-dir", paramLabel = "<dir>", description = "Location of the exported logs directory", converter = OptionalPathConverter.class, defaultValue = "")
+        @Option(names = "--option", paramLabel = "<option>", description = "Extra options to provide to environment (property can be used multiple times; format is key=value)")
+        public Map<String, String> extraOptions = new HashMap<>();
+
+        @Option(names = "--logs-dir", paramLabel = "<dir>", description = "Location of the exported logs directory " + DEFAULT_VALUE)
         public Optional<Path> logsDirBase;
 
         public Module toModule()
@@ -107,6 +115,7 @@ public final class EnvironmentUp
         private final EnvironmentConfig environmentConfig;
         private final Optional<Path> logsDirBase;
         private final DockerContainer.OutputMode outputMode;
+        private final Map<String, String> extraOptions;
 
         @Inject
         public Execution(EnvironmentFactory environmentFactory, EnvironmentConfig environmentConfig, EnvironmentOptions options, EnvironmentUpOptions environmentUpOptions)
@@ -118,13 +127,14 @@ public final class EnvironmentUp
             this.environment = environmentUpOptions.environment;
             this.outputMode = requireNonNull(options.output, "options.output is null");
             this.logsDirBase = requireNonNull(environmentUpOptions.logsDirBase, "environmentUpOptions.logsDirBase is null");
+            this.extraOptions = ImmutableMap.copyOf(requireNonNull(environmentUpOptions.extraOptions, "environmentUpOptions.extraOptions is null"));
         }
 
         @Override
         public Integer call()
         {
             Optional<Path> environmentLogPath = logsDirBase.map(dir -> dir.resolve(environment));
-            Environment.Builder builder = environmentFactory.get(environment, environmentConfig)
+            Environment.Builder builder = environmentFactory.get(environment, environmentConfig, extraOptions)
                     .setContainerOutputMode(outputMode)
                     .setLogsBaseDir(environmentLogPath)
                     .removeContainer(TESTS);
@@ -133,7 +143,7 @@ public final class EnvironmentUp
                 builder.removeContainers(container -> isPrestoContainer(container.getLogicalName()));
             }
 
-            log.info("Creating environment '%s' with configuration %s", environment, environmentConfig);
+            log.info("Creating environment '%s' with configuration %s and options %s", environment, environmentConfig, extraOptions);
             Environment environment = builder.build(getStandardListeners(environmentLogPath));
             environment.start();
 

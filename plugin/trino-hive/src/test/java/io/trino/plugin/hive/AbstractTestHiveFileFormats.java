@@ -527,7 +527,7 @@ public abstract class AbstractTestHiveFileFormats
         return columns;
     }
 
-    public static FileSplit createTestFilePresto(
+    public static FileSplit createTestFileTrino(
             String filePath,
             HiveStorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
@@ -589,7 +589,8 @@ public abstract class AbstractTestHiveFileFormats
                 session,
                 OptionalInt.empty(),
                 NO_ACID_TRANSACTION,
-                false);
+                false,
+                WriterKind.INSERT);
 
         FileWriter hiveFileWriter = fileWriter.orElseThrow(() -> new IllegalArgumentException("fileWriterFactory"));
         hiveFileWriter.appendRows(page);

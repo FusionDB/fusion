@@ -15,6 +15,7 @@ package io.trino.tests.product.launcher.cli;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Module;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
@@ -40,18 +41,20 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.tests.product.launcher.cli.Commands.runCommand;
-import static io.trino.tests.product.launcher.docker.ContainerUtil.exposePort;
 import static io.trino.tests.product.launcher.env.DockerContainer.cleanOrCreateHostPath;
 import static io.trino.tests.product.launcher.env.EnvironmentContainers.TESTS;
 import static io.trino.tests.product.launcher.env.EnvironmentListener.getStandardListeners;
 import static io.trino.tests.product.launcher.env.common.Standard.CONTAINER_TEMPTO_PROFILE_CONFIG;
+import static io.trino.tests.product.launcher.testcontainers.PortBinder.unsafelyExposePort;
 import static java.lang.StrictMath.toIntExact;
 import static java.util.Objects.requireNonNull;
 import static org.testcontainers.containers.BindMode.READ_ONLY;
@@ -111,19 +114,22 @@ public final class TestRun
         @Option(names = "--environment", paramLabel = "<environment>", description = "Name of the environment to start", required = true)
         public String environment;
 
+        @Option(names = "--option", paramLabel = "<option>", description = "Extra options to provide to environment (property can be used multiple times; format is key=value)")
+        public Map<String, String> extraOptions = new HashMap<>();
+
         @Option(names = "--attach", description = "attach to an existing environment")
         public boolean attach;
 
         @Option(names = "--reports-dir", paramLabel = "<dir>", description = "Location of the reports directory " + DEFAULT_VALUE, defaultValue = "${product-tests.module}/target/reports")
         public Path reportsDir;
 
-        @Option(names = "--logs-dir", paramLabel = "<dir>", description = "Location of the exported logs directory " + DEFAULT_VALUE, converter = OptionalPathConverter.class, defaultValue = "")
+        @Option(names = "--logs-dir", paramLabel = "<dir>", description = "Location of the exported logs directory " + DEFAULT_VALUE)
         public Optional<Path> logsDirBase;
 
         @Option(names = "--startup-retries", paramLabel = "<retries>", description = "Environment startup retries " + DEFAULT_VALUE, defaultValue = "5")
         public Integer startupRetries = 5;
 
-        @Option(names = "--timeout", paramLabel = "<timeout>", description = "Maximum duration of tests execution " + DEFAULT_VALUE, converter = DurationConverter.class, defaultValue = "999d")
+        @Option(names = "--timeout", paramLabel = "<timeout>", description = "Maximum duration of tests execution " + DEFAULT_VALUE, defaultValue = "999d")
         public Duration timeout;
 
         @Parameters(paramLabel = "<argument>", description = "Test arguments")
@@ -152,6 +158,7 @@ public final class TestRun
         private final Path reportsDirBase;
         private final Optional<Path> logsDirBase;
         private final EnvironmentConfig environmentConfig;
+        private final Map<String, String> extraOptions;
 
         @Inject
         public Execution(EnvironmentFactory environmentFactory, EnvironmentOptions environmentOptions, EnvironmentConfig environmentConfig, TestRunOptions testRunOptions)
@@ -170,6 +177,7 @@ public final class TestRun
             this.reportsDirBase = requireNonNull(testRunOptions.reportsDir, "testRunOptions.reportsDirBase is empty");
             this.logsDirBase = requireNonNull(testRunOptions.logsDirBase, "testRunOptions.logsDirBase is empty");
             this.environmentConfig = requireNonNull(environmentConfig, "environmentConfig is null");
+            this.extraOptions = ImmutableMap.copyOf(requireNonNull(testRunOptions.extraOptions, "testRunOptions.extraOptions is null"));
         }
 
         @Override
@@ -225,7 +233,7 @@ public final class TestRun
                         .collect(toImmutableList());
                 testsContainer.dependsOn(environmentContainers);
 
-                log.info("Starting environment '%s' with config '%s'", this.environment, environmentConfig.getConfigName());
+                log.info("Starting environment '%s' with config '%s' and options '%s'", this.environment, environmentConfig.getConfigName(), extraOptions);
                 environment.start();
             }
             else {
@@ -239,7 +247,7 @@ public final class TestRun
 
         private Environment getEnvironment()
         {
-            Environment.Builder builder = environmentFactory.get(environment, environmentConfig)
+            Environment.Builder builder = environmentFactory.get(environment, environmentConfig, extraOptions)
                     .setContainerOutputMode(outputMode)
                     .setStartupRetries(startupRetries)
                     .setLogsBaseDir(logsDirBase);
@@ -252,7 +260,7 @@ public final class TestRun
                 if (debug) {
                     temptoJavaOptions = new ArrayList<>(temptoJavaOptions);
                     temptoJavaOptions.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:5007");
-                    exposePort(container, 5007); // debug port
+                    unsafelyExposePort(container, 5007); // debug port
                 }
 
                 if (System.getenv("CONTINUOUS_INTEGRATION") != null) {

@@ -15,6 +15,7 @@ package io.trino.execution;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
+import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
@@ -32,7 +33,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static io.trino.metadata.MetadataUtil.createCatalogSchemaName;
 import static io.trino.metadata.MetadataUtil.createPrincipal;
 import static io.trino.metadata.MetadataUtil.createQualifiedObjectName;
@@ -51,7 +52,14 @@ public class GrantTask
     }
 
     @Override
-    public ListenableFuture<?> execute(Grant statement, TransactionManager transactionManager, Metadata metadata, AccessControl accessControl, QueryStateMachine stateMachine, List<Expression> parameters)
+    public ListenableFuture<Void> execute(
+            Grant statement,
+            TransactionManager transactionManager,
+            Metadata metadata,
+            AccessControl accessControl,
+            QueryStateMachine stateMachine,
+            List<Expression> parameters,
+            WarningCollector warningCollector)
     {
         if (statement.getType().filter(GrantOnType.SCHEMA::equals).isPresent()) {
             executeGrantOnSchema(stateMachine.getSession(), statement, metadata, accessControl);
@@ -59,7 +67,7 @@ public class GrantTask
         else {
             executeGrantOnTable(stateMachine.getSession(), statement, metadata, accessControl);
         }
-        return immediateFuture(null);
+        return immediateVoidFuture();
     }
 
     private void executeGrantOnSchema(Session session, Grant statement, Metadata metadata, AccessControl accessControl)

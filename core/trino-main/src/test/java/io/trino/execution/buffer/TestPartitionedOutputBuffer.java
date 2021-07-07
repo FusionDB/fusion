@@ -54,10 +54,10 @@ import static io.trino.execution.buffer.OutputBuffers.createInitialEmptyOutputBu
 import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 public class TestPartitionedOutputBuffer
 {
@@ -87,18 +87,12 @@ public class TestPartitionedOutputBuffer
     @Test
     public void testInvalidConstructorArg()
     {
-        try {
-            createPartitionedBuffer(createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(FIRST, 0).withNoMoreBufferIds(), DataSize.ofBytes(0));
-            fail("Expected IllegalStateException");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
-        try {
-            createPartitionedBuffer(createInitialEmptyOutputBuffers(PARTITIONED), DataSize.ofBytes(0));
-            fail("Expected IllegalStateException");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
+        assertThatThrownBy(() -> createPartitionedBuffer(createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(FIRST, 0).withNoMoreBufferIds(), DataSize.ofBytes(0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("maxBufferedBytes must be > 0");
+        assertThatThrownBy(() -> createPartitionedBuffer(createInitialEmptyOutputBuffers(PARTITIONED), DataSize.ofBytes(0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Expected a final output buffer descriptor");
     }
 
     @Test
@@ -147,7 +141,7 @@ public class TestPartitionedOutputBuffer
         assertQueueState(buffer, SECOND, 10, 0);
 
         // try to add one more page, which should block
-        ListenableFuture<?> future = enqueuePage(buffer, createPage(13), firstPartition);
+        ListenableFuture<Void> future = enqueuePage(buffer, createPage(13), firstPartition);
         assertFalse(future.isDone());
         assertQueueState(buffer, FIRST, 11, 3);
         assertQueueState(buffer, SECOND, 10, 0);
@@ -329,15 +323,12 @@ public class TestPartitionedOutputBuffer
 
         assertFalse(buffer.isFinished());
 
-        try {
-            buffer.setOutputBuffers(createInitialEmptyOutputBuffers(PARTITIONED)
-                    .withBuffer(FIRST, 0)
-                    .withBuffer(SECOND, 0)
-                    .withNoMoreBufferIds());
-            fail("Expected IllegalStateException from addQueue after noMoreQueues has been called");
-        }
-        catch (IllegalArgumentException ignored) {
-        }
+        assertThatThrownBy(() -> buffer.setOutputBuffers(createInitialEmptyOutputBuffers(PARTITIONED)
+                .withBuffer(FIRST, 0)
+                .withBuffer(SECOND, 0)
+                .withNoMoreBufferIds()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Expected buffer to not change after no more buffers is set");
     }
 
     @Test
@@ -406,7 +397,7 @@ public class TestPartitionedOutputBuffer
         assertQueueState(buffer, FIRST, 2, 0);
 
         // third page is blocked
-        ListenableFuture<?> future = enqueuePage(buffer, createPage(3), secondPartition);
+        ListenableFuture<Void> future = enqueuePage(buffer, createPage(3), secondPartition);
 
         // we should be blocked
         assertFalse(future.isDone());
@@ -561,8 +552,8 @@ public class TestPartitionedOutputBuffer
         }
 
         // enqueue the addition two pages more pages
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));
@@ -641,8 +632,8 @@ public class TestPartitionedOutputBuffer
         }
 
         // add two pages to the buffer queue
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));
@@ -714,8 +705,8 @@ public class TestPartitionedOutputBuffer
         }
 
         // add two pages to the buffer queue
-        ListenableFuture<?> firstEnqueuePage = enqueuePage(buffer, createPage(5));
-        ListenableFuture<?> secondEnqueuePage = enqueuePage(buffer, createPage(6));
+        ListenableFuture<Void> firstEnqueuePage = enqueuePage(buffer, createPage(5));
+        ListenableFuture<Void> secondEnqueuePage = enqueuePage(buffer, createPage(6));
 
         // get and acknowledge one page
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), MAX_WAIT), bufferResult(0, createPage(0)));

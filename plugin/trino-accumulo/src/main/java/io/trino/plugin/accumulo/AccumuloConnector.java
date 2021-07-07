@@ -39,7 +39,7 @@ import static io.trino.spi.transaction.IsolationLevel.checkConnectorSupports;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Presto Connector for Accumulo.
+ * Trino Connector for Accumulo.
  * Defines several high-level classes for properties, metadata, retrieving splits, providing I/O operations, etc.
  */
 public class AccumuloConnector
@@ -65,7 +65,7 @@ public class AccumuloConnector
             AccumuloTableProperties tableProperties)
     {
         this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
-        this.metadataFactory = requireNonNull(metadataFactory, "metadata is null");
+        this.metadataFactory = requireNonNull(metadataFactory, "metadataFactory is null");
         this.splitManager = requireNonNull(splitManager, "splitManager is null");
         this.recordSetProvider = requireNonNull(recordSetProvider, "recordSetProvider is null");
         this.pageSinkProvider = requireNonNull(pageSinkProvider, "pageSinkProvider is null");

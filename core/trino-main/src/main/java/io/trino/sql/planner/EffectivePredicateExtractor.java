@@ -32,6 +32,7 @@ import io.trino.sql.planner.plan.ExchangeNode;
 import io.trino.sql.planner.plan.FilterNode;
 import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.LimitNode;
+import io.trino.sql.planner.plan.PatternRecognitionNode;
 import io.trino.sql.planner.plan.PlanNode;
 import io.trino.sql.planner.plan.PlanVisitor;
 import io.trino.sql.planner.plan.ProjectNode;
@@ -252,7 +253,9 @@ public class EffectivePredicateExtractor
             }
 
             // TODO: replace with metadata.getTableProperties() when table layouts are fully removed
-            return domainTranslator.toPredicate(predicate.simplify().transform(assignments::get));
+            return domainTranslator.toPredicate(predicate.simplify()
+                    .filter((columnHandle, domain) -> assignments.containsKey(columnHandle))
+                    .transformKeys(assignments::get));
         }
 
         @Override
@@ -265,6 +268,13 @@ public class EffectivePredicateExtractor
         public Expression visitWindow(WindowNode node, Void context)
         {
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Expression visitPatternRecognition(PatternRecognitionNode node, Void context)
+        {
+            Expression sourcePredicate = node.getSource().accept(this, context);
+            return pullExpressionThroughSymbols(sourcePredicate, node.getOutputSymbols());
         }
 
         @Override
@@ -287,9 +297,8 @@ public class EffectivePredicateExtractor
                 case RIGHT:
                 case FULL:
                     return TRUE_LITERAL;
-                default:
-                    throw new UnsupportedOperationException("Unknown UNNEST join type: " + node.getJoinType());
             }
+            throw new UnsupportedOperationException("Unknown UNNEST join type: " + node.getJoinType());
         }
 
         @Override
@@ -328,9 +337,8 @@ public class EffectivePredicateExtractor
                             .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), node.getOutputSymbols(), node.getRight().getOutputSymbols()::contains))
                             .addAll(pullNullableConjunctsThroughOuterJoin(joinConjuncts, node.getOutputSymbols(), node.getLeft().getOutputSymbols()::contains, node.getRight().getOutputSymbols()::contains))
                             .build());
-                default:
-                    throw new UnsupportedOperationException("Unknown join type: " + node.getType());
             }
+            throw new UnsupportedOperationException("Unknown join type: " + node.getType());
         }
 
         @Override
@@ -372,7 +380,7 @@ public class EffectivePredicateExtractor
                             nonDeterministic[i] = true;
                         }
                         else {
-                            ExpressionInterpreter interpreter = ExpressionInterpreter.expressionOptimizer(value, metadata, session, expressionTypes);
+                            ExpressionInterpreter interpreter = new ExpressionInterpreter(value, metadata, session, expressionTypes);
                             Object item = interpreter.optimize(NoOpSymbolResolver.INSTANCE);
                             if (item instanceof Expression) {
                                 return TRUE_LITERAL;
@@ -394,7 +402,7 @@ public class EffectivePredicateExtractor
                     if (!DeterminismEvaluator.isDeterministic(row, metadata)) {
                         return TRUE_LITERAL;
                     }
-                    ExpressionInterpreter interpreter = ExpressionInterpreter.expressionOptimizer(row, metadata, session, expressionTypes);
+                    ExpressionInterpreter interpreter = new ExpressionInterpreter(row, metadata, session, expressionTypes);
                     Object evaluated = interpreter.optimize(NoOpSymbolResolver.INSTANCE);
                     if (evaluated instanceof Expression) {
                         return TRUE_LITERAL;
@@ -485,9 +493,8 @@ public class EffectivePredicateExtractor
                             .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
                             .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), node.getOutputSymbols(), node.getRight().getOutputSymbols()::contains))
                             .build());
-                default:
-                    throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
             }
+            throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
         }
 
         private Expression deriveCommonPredicates(PlanNode node, Function<Integer, Collection<Map.Entry<Symbol, SymbolReference>>> mapping)

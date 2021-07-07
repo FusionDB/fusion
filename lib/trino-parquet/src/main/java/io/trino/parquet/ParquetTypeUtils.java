@@ -149,6 +149,9 @@ public final class ParquetTypeUtils
                 return ParquetEncoding.PLAIN;
             case RLE:
                 return ParquetEncoding.RLE;
+            case BYTE_STREAM_SPLIT:
+                // TODO: https://github.com/trinodb/trino/issues/8357
+                throw new ParquetDecodingException("Unsupported Parquet encoding: " + encoding);
             case BIT_PACKED:
                 return ParquetEncoding.BIT_PACKED;
             case PLAIN_DICTIONARY:
@@ -161,9 +164,8 @@ public final class ParquetTypeUtils
                 return ParquetEncoding.DELTA_BYTE_ARRAY;
             case RLE_DICTIONARY:
                 return ParquetEncoding.RLE_DICTIONARY;
-            default:
-                throw new ParquetDecodingException("Unsupported Parquet encoding: " + encoding);
         }
+        throw new ParquetDecodingException("Unsupported Parquet encoding: " + encoding);
     }
 
     public static org.apache.parquet.schema.Type getParquetTypeByName(String columnName, GroupType groupType)

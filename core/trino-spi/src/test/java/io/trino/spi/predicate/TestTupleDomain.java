@@ -33,6 +33,7 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.function.Function;
 
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.spi.predicate.TupleDomain.columnWiseUnion;
@@ -40,6 +41,7 @@ import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.VarcharType.VARCHAR;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -636,7 +638,7 @@ public class TestTupleDomain
         assertEquals(transformed.getDomains().get(), expected);
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testTransformFailsWithNonUniqueMapping()
     {
         Map<Integer, Domain> domains = ImmutableMap.<Integer, Domain>builder()
@@ -647,14 +649,78 @@ public class TestTupleDomain
 
         TupleDomain<Integer> domain = TupleDomain.withColumnDomains(domains);
 
-        domain.transform(input -> "x");
+        assertThatThrownBy(() -> domain.transform(input -> "x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Every argument must have a unique mapping. 2 maps to [ SortedRangeSet[type=bigint, ranges=1, {[2]}] ] and [ SortedRangeSet[type=bigint, ranges=1, {[1]}] ]");
+    }
+
+    @Test
+    public void testTransformKeys()
+    {
+        Map<Integer, Domain> domains = ImmutableMap.<Integer, Domain>builder()
+                .put(1, Domain.singleValue(BIGINT, 1L))
+                .put(2, Domain.singleValue(BIGINT, 2L))
+                .put(3, Domain.singleValue(BIGINT, 3L))
+                .build();
+
+        TupleDomain<Integer> domain = TupleDomain.withColumnDomains(domains);
+        TupleDomain<String> transformed = domain.transformKeys(Object::toString);
+
+        Map<String, Domain> expected = ImmutableMap.<String, Domain>builder()
+                .put("1", Domain.singleValue(BIGINT, 1L))
+                .put("2", Domain.singleValue(BIGINT, 2L))
+                .put("3", Domain.singleValue(BIGINT, 3L))
+                .build();
+
+        assertEquals(transformed.getDomains().get(), expected);
+    }
+
+    @Test
+    public void testTransformKeysFailsWithNonUniqueMapping()
+    {
+        Map<Integer, Domain> domains = ImmutableMap.<Integer, Domain>builder()
+                .put(1, Domain.singleValue(BIGINT, 1L))
+                .put(2, Domain.singleValue(BIGINT, 2L))
+                .put(3, Domain.singleValue(BIGINT, 3L))
+                .build();
+
+        TupleDomain<Integer> domain = TupleDomain.withColumnDomains(domains);
+
+        assertThatThrownBy(() -> domain.transformKeys(input -> "x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Every argument must have a unique mapping. 2 maps to [ SortedRangeSet[type=bigint, ranges=1, {[2]}] ] and [ SortedRangeSet[type=bigint, ranges=1, {[1]}] ]");
+    }
+
+    /**
+     * Ensure {@link TupleDomain#transformKeys(Function)} fails when the function returns {@code null}.
+     * {@code null}-friendliness could be a source of potential bugs. For example code like
+     * <pre>{@code
+     * TupleDomain<Symbol> tupleDomain = ...;
+     * TupleDomain<ColumnHandle> converted = tupleDomain.transform(tableScan.getAssignments()::get);
+     * }</pre>
+     * would silently drops information about correlated symbols.
+     */
+    @Test
+    public void testTransformKeysRejectsNull()
+    {
+        Map<Integer, Domain> domains = ImmutableMap.<Integer, Domain>builder()
+                .put(1, Domain.singleValue(BIGINT, 1L))
+                .put(2, Domain.singleValue(BIGINT, 2L))
+                .put(3, Domain.singleValue(BIGINT, 3L))
+                .build();
+
+        TupleDomain<Integer> domain = TupleDomain.withColumnDomains(domains);
+
+        assertThatThrownBy(() -> domain.transformKeys(input -> input == 2 ? null : input))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageMatching("mapping function \\S+ returned null for 2");
     }
 
     private boolean overlaps(Map<ColumnHandle, Domain> domains1, Map<ColumnHandle, Domain> domains2)
     {
         TupleDomain<ColumnHandle> tupleDomain1 = TupleDomain.withColumnDomains(domains1);
-        TupleDomain<ColumnHandle> tupleDOmain2 = TupleDomain.withColumnDomains(domains2);
-        return tupleDomain1.overlaps(tupleDOmain2);
+        TupleDomain<ColumnHandle> tupleDomain2 = TupleDomain.withColumnDomains(domains2);
+        return tupleDomain1.overlaps(tupleDomain2);
     }
 
     private boolean contains(Map<ColumnHandle, Domain> superSet, Map<ColumnHandle, Domain> subSet)

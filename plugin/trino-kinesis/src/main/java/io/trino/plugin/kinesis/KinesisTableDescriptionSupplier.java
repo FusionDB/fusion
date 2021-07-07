@@ -40,7 +40,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * This class get() method reads the table description file stored in Kinesis directory
- * and then creates user defined field for Presto Table.
+ * and then creates user defined field for Trino Table.
  */
 public class KinesisTableDescriptionSupplier
         implements Supplier<Map<SchemaTableName, KinesisStreamDescription>>
@@ -59,7 +59,7 @@ public class KinesisTableDescriptionSupplier
     {
         this.kinesisConfig = requireNonNull(kinesisConfig, "kinesisConfig is null");
         this.streamDescriptionCodec = requireNonNull(streamDescriptionCodec, "streamDescriptionCodec is null");
-        this.s3TableConfigClient = requireNonNull(s3TableConfigClient, "S3 table config client is null");
+        this.s3TableConfigClient = requireNonNull(s3TableConfigClient, "s3TableConfigClient is null");
     }
 
     @Override
@@ -91,7 +91,6 @@ public class KinesisTableDescriptionSupplier
             return tableDefinitions;
         }
         catch (IOException e) {
-            throwIfUnchecked(e);
             throw new RuntimeException(e);
         }
     }

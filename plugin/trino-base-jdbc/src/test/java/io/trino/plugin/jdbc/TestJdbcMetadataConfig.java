@@ -14,6 +14,7 @@
 package io.trino.plugin.jdbc;
 
 import com.google.common.collect.ImmutableMap;
+import io.airlift.configuration.ConfigurationFactory;
 import org.testng.annotations.Test;
 
 import java.util.Map;
@@ -21,6 +22,8 @@ import java.util.Map;
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestJdbcMetadataConfig
 {
@@ -29,8 +32,11 @@ public class TestJdbcMetadataConfig
     {
         assertRecordedDefaults(recordDefaults(JdbcMetadataConfig.class)
                 .setAllowDropTable(false)
+                .setJoinPushdownEnabled(false)
                 .setAggregationPushdownEnabled(true)
-                .setDomainCompactionThreshold(32));
+                .setTopNPushdownEnabled(true)
+                .setDomainCompactionThreshold(32)
+                .setInsertBatchSize(1000));
     }
 
     @Test
@@ -38,15 +44,42 @@ public class TestJdbcMetadataConfig
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
                 .put("allow-drop-table", "true")
+                .put("join-pushdown.enabled", "true")
                 .put("aggregation-pushdown.enabled", "false")
                 .put("domain-compaction-threshold", "42")
+                .put("topn-pushdown.enabled", "false")
+                .put("insert.batch-size", "24")
                 .build();
 
         JdbcMetadataConfig expected = new JdbcMetadataConfig()
                 .setAllowDropTable(true)
+                .setJoinPushdownEnabled(true)
                 .setAggregationPushdownEnabled(false)
-                .setDomainCompactionThreshold(42);
+                .setTopNPushdownEnabled(false)
+                .setDomainCompactionThreshold(42)
+                .setInsertBatchSize(24);
 
         assertFullMapping(properties, expected);
+    }
+
+    @Test
+    public void testInsertBatchSizeValidation()
+    {
+        assertThatThrownBy(() -> makeConfig(ImmutableMap.of("insert.batch-size", "-42")))
+                .hasMessageContaining("insert.batch-size: must be greater than or equal to 1");
+
+        assertThatThrownBy(() -> makeConfig(ImmutableMap.of("insert.batch-size", "0")))
+                .hasMessageContaining("insert.batch-size: must be greater than or equal to 1");
+
+        assertThatCode(() -> makeConfig(ImmutableMap.of("insert.batch-size", "1")))
+                .doesNotThrowAnyException();
+
+        assertThatCode(() -> makeConfig(ImmutableMap.of("insert.batch-size", "42")))
+                .doesNotThrowAnyException();
+    }
+
+    private static JdbcMetadataConfig makeConfig(Map<String, String> props)
+    {
+        return new ConfigurationFactory(props).build(JdbcMetadataConfig.class);
     }
 }

@@ -34,10 +34,6 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
-import org.openjdk.jmh.runner.Runner;
-import org.openjdk.jmh.runner.options.Options;
-import org.openjdk.jmh.runner.options.OptionsBuilder;
-import org.openjdk.jmh.runner.options.VerboseMode;
 
 import java.io.File;
 import java.io.IOException;
@@ -53,10 +49,11 @@ import java.util.concurrent.TimeUnit;
 import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
+import static io.trino.jmh.Benchmarks.benchmark;
 import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.trino.metadata.MetadataManager.createTestMetadataManager;
 import static io.trino.orc.OrcReader.INITIAL_BATCH_SIZE;
-import static io.trino.orc.OrcTester.writeOrcColumnPresto;
+import static io.trino.orc.OrcTester.writeOrcColumnTrino;
 import static io.trino.orc.metadata.CompressionKind.NONE;
 import static io.trino.plugin.tpch.TpchTables.getTableColumns;
 import static io.trino.plugin.tpch.TpchTables.getTablePages;
@@ -369,7 +366,7 @@ public class BenchmarkColumnReaders
             this.types = ImmutableList.of(type);
             temporaryDirectory = createTempDir();
             orcFile = new File(temporaryDirectory, randomUUID().toString());
-            writeOrcColumnPresto(orcFile, NONE, type, values, new OrcWriterStats());
+            writeOrcColumnTrino(orcFile, NONE, type, values, new OrcWriterStats());
 
             dataSource = new MemoryOrcDataSource(new OrcDataSourceId(orcFile.getPath()), Slices.wrappedBuffer(readAllBytes(orcFile.toPath())));
         }
@@ -1097,11 +1094,6 @@ public class BenchmarkColumnReaders
     public static void main(String[] args)
             throws Exception
     {
-        Options options = new OptionsBuilder()
-                .verbosity(VerboseMode.NORMAL)
-                .include(".*" + BenchmarkColumnReaders.class.getSimpleName() + ".*")
-                .build();
-
-        new Runner(options).run();
+        benchmark(BenchmarkColumnReaders.class).run();
     }
 }
